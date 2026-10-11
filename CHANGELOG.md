@@ -81,6 +81,8 @@ After you update:
 - **Moves work on a display above your main one.** Layout used to report "Reorder move failed". Fixed by @camguillory in [#1292](https://github.com/thaw-app/Thaw/pull/1292).
 - **The menu bar holds still while an item is moving.** Opening the Thaw Bar or Layout could shift the other items under it. Fixed by @camguillory in [#1295](https://github.com/thaw-app/Thaw/pull/1295).
 - **A group that macOS will not move no longer keeps Layout dimmed.** Thaw used to keep retrying. It now stops after one try and tells you. Fixed by @diazdesandi.
+- **Moving one of Droppy's three icons no longer leaves the other two in Hidden.** Fixed by @diazdesandi.
+- **An item you drop beside one of Apple's items lands where you dropped it.** It could land one place short, and Thaw then took the cursor to finish the move. Fixed by @diazdesandi.
 
 #### Thaw's icon, the Thaw Bar and Tools
 
