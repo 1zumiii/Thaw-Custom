@@ -17,4 +17,4 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: thaw-app/org-ci/actions/pr-build-command@61f345397193bf3f9356c4f6179fb6ed4c84dd45
+      - uses: thaw-app/org-ci/actions/pr-build-command@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b

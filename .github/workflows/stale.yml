@@ -15,4 +15,4 @@ jobs:
     permissions:
       issues: write
     steps:
-      - uses: thaw-app/org-ci/actions/close-stale-issues@61f345397193bf3f9356c4f6179fb6ed4c84dd45
+      - uses: thaw-app/org-ci/actions/close-stale-issues@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b

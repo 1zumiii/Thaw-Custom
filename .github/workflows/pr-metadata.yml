@@ -24,7 +24,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: thaw-app/org-ci/actions/pr-metadata@61f345397193bf3f9356c4f6179fb6ed4c84dd45
+      - uses: thaw-app/org-ci/actions/pr-metadata@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           comment-marker: "<!-- thaw-pr-conventions -->"
           title-example-scope: menubar

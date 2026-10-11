@@ -8,9 +8,6 @@ concurrency:
 
 on:
   pull_request:
-  push:
-    branches:
-      - development
   schedule:
     # Weekly hygiene scan (offset from Scorecard / CodeQL).
     - cron: "17 5 * * 1"
@@ -34,7 +31,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: thaw-app/org-ci/actions/dependency-sca@61f345397193bf3f9356c4f6179fb6ed4c84dd45
+      - uses: thaw-app/org-ci/actions/dependency-sca@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           lockfiles: |
             Thaw.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
