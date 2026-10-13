@@ -1291,7 +1291,7 @@ Please report issues at [github.com/thaw-app/Thaw/issues](https://github.com/tha
 
 <a href="https://www.producthunt.com/products/thaw-2?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-thaw-3" target="_blank" rel="noopener noreferrer"><img alt="Thaw - The only app that owns your whole menu bar, in and out | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1239794&amp;theme=light&amp;t=1788423441056"></a>
 
-Thanks to everyone who tested the beta and sent logs. @commanderk33n found and fixed the Spotlight crash. @CamilleGuillory and @nk-tedo-001 co-authored the settings work. @3raxton reported the launch icon and profile layout bugs, @nickawilliams reported the Thaw Bar toggle, and @joaofrgomes helped pin down how item spacing really behaves.
+Thanks to everyone who tested the beta and sent logs. @commanderk33n found and fixed the Spotlight crash. @camguillory and @nk-tedo-001 co-authored the settings work. @3raxton reported the launch icon and profile layout bugs, @nickawilliams reported the Thaw Bar toggle, and @joaofrgomes helped pin down how item spacing really behaves.
 
 This build has two new features, a rework of how Thaw moves items on its own, and four reported fixes. The worst of the fixes is not a beta bug at all: changing menu bar spacing could kill Spotlight outright, and it stayed gone until the machine was rebooted (#720, found and fixed by @commanderk33n). Spacing is re-applied whenever a display connects or disconnects, so the crash fired again on every dock and undock. From the beta.1 reports: revealing a hidden item could drop it on the wrong side of the chevron, so the reveal failed and the item stayed put (#1035); the "Thaw took too long to respond" report turned out to be a Control Center window left behind by an exited Thaw process, freezing the item cache for as long as it stuck around (#1032); and the Capture Inspector was showing people the bottom of their screen instead of their menu bar (#1033).
 
@@ -1368,7 +1368,7 @@ First beta of the 2.1.0 line. This is the wave the 2.0.0 notes pointed at: trigg
 - Adaptive Gradient tint builds the gradient from the wallpaper's dominant colours instead of one averaged brown. Colours are bucketed and taken most-covering first, skipping any too close to one already taken.
 - Items that ask for attention can surface themselves. A blinking status icon briefly shows the section holding it. A blink is told apart from a clock or a battery percentage by whether the icon keeps returning to a state it already showed. Off by default under Advanced.
 - A Thaw Bar of its own: shape, tint, and border for the bar, independent of the menu bar it mirrors (#248, thanks @kn666).
-- Hidden icons that refresh at the slider rate. Captures run through a recyclable XPC helper, so the per-call dictionary leak stays out of the app (#942, thanks @CamilleGuillory).
+- Hidden icons that refresh at the slider rate. Captures run through a recyclable XPC helper, so the per-call dictionary leak stays out of the app (#942, thanks @camguillory).
 - One Per display section: the repeated per-display blocks collapse into a single picker-driven section.
 - A standalone layout editor opens on its own, with per-Space appearance overrides and last-pane restore; items can be activated straight from the editor (#985, thanks @alvst).
 - App icons where captures can't go. Items nobody can capture draw their owning app's icon, so the Thaw Bar, the layout pane, and Search work with Accessibility alone.
@@ -1628,7 +1628,7 @@ The headline of the RC cycle was reliability: deterministic ordering with stable
 
 Thaw 2.0.0 was built by Toni Förster (@stonerl), René Jiménez (@diazdesandi), and Amir Zarrinkafsh (@nightah), with contributions, reports, diagnostics, translations, and patient testing from:
 
-@aliaskar-rockeater · @alvst · @andredlng · @auspic7 · @beantownbytes · @billchirico · @bpresles · @brucemakes012 · @bytepl · @CamilleGuillory · @cbguder · @danielhopkins · @davidnichols-ops · @Daventure91 · @eli-yip · @exsesx · @gitmichaelqiu · @howardhey · @hxu · @JamesLautner · @jamesyc · @Jizzy015 · @kn666 · @kylewhirl · @lathe-agent-oa · @looseboy · @lucifercraig12345-create · @MashnoorKek · @nk-tedo-001 · @SAY-5 · @ShiroKSH · @Skyearn · @slatlasdev · @stu-carter · @subway-jack · @t4sh · @TheBenMeadows · @VailElla · @volcbs · @warmup72 · @wizaard88 · @yoodu · @YuriNachos · @ZeterMordio · @Zophiekat
+@aliaskar-rockeater · @alvst · @andredlng · @auspic7 · @beantownbytes · @billchirico · @bpresles · @brucemakes012 · @bytepl · @camguillory · @cbguder · @danielhopkins · @davidnichols-ops · @Daventure91 · @eli-yip · @exsesx · @gitmichaelqiu · @howardhey · @hxu · @JamesLautner · @jamesyc · @Jizzy015 · @kn666 · @kylewhirl · @lathe-agent-oa · @looseboy · @lucifercraig12345-create · @MashnoorKek · @nk-tedo-001 · @SAY-5 · @ShiroKSH · @Skyearn · @slatlasdev · @stu-carter · @subway-jack · @t4sh · @TheBenMeadows · @VailElla · @volcbs · @warmup72 · @wizaard88 · @yoodu · @YuriNachos · @ZeterMordio · @Zophiekat
 
 and every translator working through Crowdin.
 
@@ -1886,7 +1886,7 @@ so they land together.
 - Advanced settings reset clears every persisted boolean, not just some of them (#910, thanks @YuriNachos). The two toggles added later in this cycle, "Arrange menu bar items" and "Move the pointer to revealed items", are covered too; leaving automatic arrangement off and then resetting to defaults used to keep it off with nothing on screen to explain why layouts stopped restoring.
 - `leftAligned` and `rightAligned` accepted as valid `iceBarLocation` values (#911, thanks @YuriNachos).
 - Settings search weights un-inverted: title now outranks keywords (#918, thanks @YuriNachos).
-- Icon refresh rate normalized onto one grid shared by the slider, URI handler, live capture floor, and Defaults: off, or `1/n` seconds for integer `n` in 1…30 (#929, thanks @CamilleGuillory).
+- Icon refresh rate normalized onto one grid shared by the slider, URI handler, live capture floor, and Defaults: off, or `1/n` seconds for integer `n` in 1…30 (#929, thanks @camguillory).
 - Relaunches after a revoked permission show the onboarding permissions flow rather than the pre-redesign `PermissionsView`.
 
 #### Appearance, capture & IceBar
@@ -1956,7 +1956,7 @@ so they land together.
 
 Thanks to everyone who reported, diagnosed, or landed fixes in this RC:
 
-@aliaskar-rockeater · @alvst · @bpresles · @brucemakes012 · @CamilleGuillory · @Daventure91 · @howardhey · @jamesyc · @Jizzy015 · @kn666 · @lathe-agent-oa · @lucifercraig12345-create · @MashnoorKek · @nightah · @nk-tedo-001 · @slatlasdev · @stu-carter · @VailElla · @warmup72 · @yoodu · @YuriNachos · @Zophiekat
+@aliaskar-rockeater · @alvst · @bpresles · @brucemakes012 · @camguillory · @Daventure91 · @howardhey · @jamesyc · @Jizzy015 · @kn666 · @lathe-agent-oa · @lucifercraig12345-create · @MashnoorKek · @nightah · @nk-tedo-001 · @slatlasdev · @stu-carter · @VailElla · @warmup72 · @yoodu · @YuriNachos · @Zophiekat
 
 ---
 
@@ -3145,7 +3145,7 @@ Thaw now supports **17 languages** with 100% completion! A huge thank you to our
 * @afuno made their first contribution in https://github.com/stonerl/Thaw/pull/139
 * @mrclrchtr made their first contribution in https://github.com/stonerl/Thaw/pull/156
 * @josericardo-fo made their first contribution in https://github.com/stonerl/Thaw/pull/152
-* @CamilleGuillory made their first contribution in https://github.com/stonerl/Thaw/pull/168
+* @camguillory made their first contribution in https://github.com/stonerl/Thaw/pull/168
 * @FormalSnake made their first contribution in https://github.com/stonerl/Thaw/pull/210
 * @musanmaz made their first contribution in https://github.com/stonerl/Thaw/pull/214
 * @william-laverty made their first contribution in https://github.com/stonerl/Thaw/pull/221
@@ -3539,7 +3539,7 @@ This beta release introduces significant performance optimizations (big THANKS g
 * **Localization**: Updated and expanded German translations.
 
 ### New Contributors
-* @CamilleGuillory made their first contribution in https://github.com/stonerl/Thaw/pull/168
+* @camguillory made their first contribution in https://github.com/stonerl/Thaw/pull/168
 
 **Full Changelog**: https://github.com/stonerl/Thaw/compare/1.1.99-beta.2...1.1.99-beta.3
 
