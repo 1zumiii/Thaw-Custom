@@ -63,7 +63,7 @@ On `feat/thaw-3`:
 - Tests use Swift Testing (`@Test`, `#expect`). Don't add XCTest.
 - Add automated tests for new behavior and regression tests for bug fixes when practical. If a change needs checking on a live menu bar, say what the automated tests can't cover and write down the manual checks you did.
 - Ask before running checks that reset permissions or preferences, change the live menu bar layout, or quit other apps. Use separate test data instead of the user's own settings.
-- Run `swiftformat .` before committing. See [Contributing](.github/CONTRIBUTING.md#technical-contributions) for build and test commands.
+- Run `swiftformat .` before committing. See [Development](docs/DEVELOPMENT.md) for build and test commands.
 
 ## Commits and pull requests
 
