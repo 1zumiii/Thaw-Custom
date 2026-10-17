@@ -52,12 +52,12 @@ nonisolated extension SearchIndex {
             property: nil
         ),
         SearchEntry(
-            id: "tools.resetControlCenter",
-            title: "Reset Control Center preferences",
-            descriptionText: String(localized: "Quit Control Center and delete its preference files so system menu bar item state can rebuild."),
+            id: "tools.restartMenuBar",
+            title: "Restart the menu bar",
+            descriptionText: String(localized: "Restarts the system's menu bar service when it gets stuck, for example on top of full-screen apps. Your layout is kept."),
             pane: .tools,
             section: "Troubleshooting",
-            keywords: ["control center", "preferences", "plist", "reset", "menu bar", "tools"],
+            keywords: ["restart", "menu bar", "stuck", "full screen", "fullscreen", "killall", "MenuBarAgent", "tools"],
             property: nil
         ),
         SearchEntry(
@@ -67,15 +67,6 @@ nonisolated extension SearchIndex {
             pane: .tools,
             section: "Troubleshooting",
             keywords: ["layout", "positions", "reset", "backup", "restore", "rebuild", "menu bar host", "tools"],
-            property: nil
-        ),
-        SearchEntry(
-            id: "tools.quitAndClearCache",
-            title: "Quit and clear cache",
-            descriptionText: String(localized: "Delete \(Constants.displayName)'s cache folder, then quit the app."),
-            pane: .tools,
-            section: "Troubleshooting",
-            keywords: ["cache", "quit", "clear", "tools"],
             property: nil
         ),
         SearchEntry(
