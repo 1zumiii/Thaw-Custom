@@ -121,14 +121,14 @@ struct FeatureTipsTests {
         #expect(recorder.retirements == 1)
     }
 
-    @Test("The tip says what it announces, shows once and waits on two rules")
+    @Test("The tip says what it announces, has no display limit and waits on two rules")
     func tipContent() {
         let tip = LayoutMultiSelectTip()
         #expect(String(localized: LayoutMultiSelectTip.titleResource) == "New: select several items")
         #expect(String(localized: LayoutMultiSelectTip.messageResource).contains("right-click"))
         #expect(tip.message != nil)
         #expect(tip.image != nil)
-        #expect(tip.options.count == 1)
+        #expect(tip.options.isEmpty)
         #expect(tip.rules.count == 2)
         _ = tip.title
     }

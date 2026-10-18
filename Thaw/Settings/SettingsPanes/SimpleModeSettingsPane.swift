@@ -69,9 +69,11 @@ struct SimpleModeSettingsPane: View {
         } else {
             @Bindable var advanced = appState.settings.advanced
             ThawSection {
+                // Simple Mode has no limitations card, so nothing holds the tip back here.
                 FoldedMenuBar(itemManager: itemManager)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
+                    .holdsMultiSelectTip(whileLimitationsCardShows: false)
 
                 if !ScreenCapture.hasCachedScreenRecordingPermission {
                     SettingsWarningPill(
@@ -82,8 +84,7 @@ struct SimpleModeSettingsPane: View {
                         action: { appState.permissions.screenRecording.performRequest() }
                     )
                 }
-                // Simple Mode has no limitations card, so nothing holds the tip back here.
-                LayoutMultiSelectTipView(isLimitationsCardShowing: false)
+                LayoutMultiSelectTipView()
                 if showsHideByDragHint {
                     ThawFirstRunHint(
                         systemImage: "hand.draw",

@@ -118,7 +118,7 @@ struct MenuBarLayoutSettingsPane: View {
                     EmptyView()
                 }
                 if LayoutBanner.allowsTips(beside: banner) {
-                    LayoutMultiSelectTipView(isLimitationsCardShowing: !isLimitationsAcknowledged)
+                    LayoutMultiSelectTipView()
                     LayoutSuggestionCards(itemManager: itemManager)
                     if showsHideByDragHint {
                         ThawFirstRunHint(
@@ -129,7 +129,7 @@ struct MenuBarLayoutSettingsPane: View {
                         }
                     }
                 }
-                LayoutBarsSection(itemManager: itemManager)
+                LayoutBarsSection(itemManager: itemManager).holdsMultiSelectTip(whileLimitationsCardShows: !isLimitationsAcknowledged)
             }
 
             if canArrangeLayout {

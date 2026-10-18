@@ -9,18 +9,25 @@ import SwiftUI
 import ThawUI
 import TipKit
 
-/// The multi-select tip as a hint card above the layout bars. Draws nothing once TipKit retires the tip.
+/// The multi-select tip as a hint card above the layout bars. Draws nothing until TipKit shows the tip.
 struct LayoutMultiSelectTipView: View {
-    /// Whether the pane's first-visit limitations card is up, which holds the tip back until it is dismissed.
-    let isLimitationsCardShowing: Bool
-
     private let tip = LayoutMultiSelectTip()
 
     var body: some View {
+        // The style draws its own glass card, so neither TipView nor the form row draws one behind it.
         TipView(tip)
             .tipViewStyle(ThawHintTipViewStyle())
-            .onChange(of: isLimitationsCardShowing, initial: true) { _, isShowing in
-                LayoutMultiSelectTip.isLimitationsCardShowing = isShowing
-            }
+            .tipBackground(Color.clear)
+            .listRowBackground(Color.clear)
+    }
+}
+
+extension View {
+    /// Tells the multi-select tip whether the limitations card is up. It goes on the pane, because a TipView
+    /// that draws nothing never runs its own modifiers, and the tip draws nothing until this is false.
+    func holdsMultiSelectTip(whileLimitationsCardShows isShowing: Bool) -> some View {
+        onChange(of: isShowing, initial: true) { _, isShowing in
+            LayoutMultiSelectTip.isLimitationsCardShowing = isShowing
+        }
     }
 }

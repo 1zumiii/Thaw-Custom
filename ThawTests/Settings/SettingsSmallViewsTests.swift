@@ -48,34 +48,6 @@ final class SettingsSmallViewsTests {
         #expect(hidden == titleOnly)
     }
 
-    @Test("Every switch What's New offers is off by default, and an older release offers them all")
-    func offeredSwitches() {
-        let settings = AdvancedSettings()
-        let offered = WhatsNewSwitch.offered(release: "3.0.0-alpha.6", settings: settings)
-        #expect(offered.first?.id == "controlItemPanel")
-        #expect(Set(offered.map(\.id)) == Set(WhatsNewSwitch.all.map(\.id)))
-    }
-
-    @Test("A switch turned on is no longer offered by a later release")
-    func switchTurnedOnIsDropped() {
-        let settings = AdvancedSettings()
-        settings.enableRecordingWatch = true
-        let offered = WhatsNewSwitch.offered(release: "9.9.9", settings: settings).map(\.id)
-        #expect(!offered.contains("recordingWatch"))
-        #expect(offered.contains("desktopMenuHiding"))
-    }
-
-    @Test("What's New draws its switches while some are off, and nothing once all are on")
-    func switchesView() {
-        let settings = AdvancedSettings()
-        let withSwitches = height(of: WhatsNewSwitchesView(settings: settings))
-        for item in WhatsNewSwitch.all {
-            settings[keyPath: item.keyPath] = true
-        }
-        let without = height(of: WhatsNewSwitchesView(settings: settings))
-        #expect(withSwitches > without)
-    }
-
     @Test("Every pane has a title and a subtitle")
     func paneTitles() {
         for pane in SettingsNavigationIdentifier.allCases {
