@@ -42,13 +42,17 @@ struct FeatureTipsTests {
         )
     }
 
-    @Test("Upgrades count only from a recorded version older than the one that brought multi-select")
+    @Test("Upgrades count only from a recorded version older than the one that brought multi-select on its line")
     func upgradeDetection() {
         #expect(LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0-alpha.9"))
         #expect(LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0-alpha.1"))
         #expect(LayoutMultiSelectTip.isUpgrade(previousVersion: "2.4.1"))
         #expect(!LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0-alpha.10"))
         #expect(!LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0-alpha.11"))
+        #expect(LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0-beta.1"))
+        #expect(LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0-beta.2"))
+        #expect(!LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0-beta.3"))
+        #expect(!LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0-beta.4"))
         #expect(!LayoutMultiSelectTip.isUpgrade(previousVersion: "3.0.0"))
         #expect(!LayoutMultiSelectTip.isUpgrade(previousVersion: nil))
         #expect(!LayoutMultiSelectTip.isUpgrade(previousVersion: ""))

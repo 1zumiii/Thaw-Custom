@@ -14,6 +14,9 @@ struct LayoutMultiSelectTip: Tip {
     /// The first version with multi-select. Anyone whose last version is older is an upgrader.
     nonisolated static let introducedIn = "3.0.0-alpha.10"
 
+    /// The first beta with multi-select. Betas sort after every alpha, so the beta line needs its own cutoff.
+    nonisolated static let betaIntroducedIn = "3.0.0-beta.3"
+
     /// Set at launch when the previous version predates multi-select, and kept in the datastore so later launches
     /// and the Settings process still see it.
     @Parameter static var isUpgrade: Bool = false
@@ -57,6 +60,9 @@ struct LayoutMultiSelectTip: Tip {
     /// No recorded version means a new install, or a first launch that went through onboarding, so it does not count.
     nonisolated static func isUpgrade(previousVersion: String?) -> Bool {
         guard let previousVersion, !previousVersion.isEmpty else { return false }
+        if previousVersion.contains("-beta") {
+            return ReleaseVersionOrder.precedes(previousVersion, betaIntroducedIn)
+        }
         return ReleaseVersionOrder.precedes(previousVersion, introducedIn)
     }
 }
