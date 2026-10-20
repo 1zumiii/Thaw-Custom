@@ -184,6 +184,8 @@ nonisolated enum Defaults {
             .confirmSpacingRelaunch: DefaultValue.confirmSpacingRelaunch,
             .unconfirmedSpacingProfileScope: DefaultValue.unconfirmedSpacingProfileScope.rawValue,
             .spacingApplyMode: DefaultValue.spacingApplyMode.rawValue,
+            .showEveryItemOnWideDisplays: DefaultValue.showEveryItemOnWideDisplays,
+            .wideDisplayMinimumWidth: DefaultValue.wideDisplayMinimumWidth,
 
             // Event Delivery
             .axMessagingTimeout: DefaultValue.axMessagingTimeout,
@@ -281,6 +283,9 @@ extension Defaults {
         /// Stand-ins for Apple menu extras Thaw removes while they sit in a
         /// hidden section. Each is off by default and independent of the others.
         static let enableModuleStandIns = false
+        /// The Control Center modules left as Apple's own while the others are
+        /// replaced, by stand-in raw value. Empty replaces all four.
+        static let skippedModuleStandIns: [String] = []
         static let enableTimeMachineTakeover = false
         static let enableTimerTakeover = false
         static let enableTextInputTakeover = false
@@ -323,6 +328,8 @@ extension Defaults {
         static let confirmSpacingRelaunch = true
         static let unconfirmedSpacingProfileScope: SpacingProfileSaveScope = .activeProfile
         static let spacingApplyMode: SpacingApplyMode = .relaunchApps
+        static let showEveryItemOnWideDisplays = false
+        static let wideDisplayMinimumWidth: Double = 2560
 
         // MARK: Event Delivery
 
@@ -396,6 +403,8 @@ extension Defaults {
         case confirmSpacingRelaunch = "ConfirmSpacingRelaunch"
         case unconfirmedSpacingProfileScope = "UnconfirmedSpacingProfileScope"
         case spacingApplyMode = "SpacingApplyMode"
+        case showEveryItemOnWideDisplays = "ShowEveryItemOnWideDisplays"
+        case wideDisplayMinimumWidth = "WideDisplayMinimumWidth"
 
         // MARK: Hotkeys Settings
 
@@ -470,6 +479,7 @@ extension Defaults {
         /// Per-extra stand-ins. Read live so flipping one reconciles only the
         /// extra it names.
         case enableModuleStandIns = "EnableModuleStandIns"
+        case skippedModuleStandIns = "SkippedModuleStandIns"
         case enableTimeMachineTakeover = "EnableTimeMachineTakeover"
         case enableTimerTakeover = "EnableTimerTakeover"
         case enableTextInputTakeover = "EnableTextInputTakeover"

@@ -76,6 +76,7 @@ extension AppSettings {
         advanced.fetchReleaseNotes = Defaults.DefaultValue.fetchReleaseNotes
         advanced.enableNativeAppHiding = Defaults.DefaultValue.enableNativeAppHiding
         advanced.enableModuleStandIns = Defaults.DefaultValue.enableModuleStandIns
+        advanced.skippedModuleStandIns = Set(Defaults.DefaultValue.skippedModuleStandIns)
         advanced.enableTimeMachineTakeover = Defaults.DefaultValue.enableTimeMachineTakeover
         advanced.enableTimerTakeover = Defaults.DefaultValue.enableTimerTakeover
         advanced.enableTextInputTakeover = Defaults.DefaultValue.enableTextInputTakeover
@@ -100,5 +101,7 @@ extension AppSettings {
         displaySettings.confirmSpacingRelaunch = Defaults.DefaultValue.confirmSpacingRelaunch
         displaySettings.unconfirmedSpacingProfileScope = Defaults.DefaultValue.unconfirmedSpacingProfileScope
         displaySettings.spacingApplyMode = Defaults.DefaultValue.spacingApplyMode
+        displaySettings.wideDisplayRule.isEnabled = Defaults.DefaultValue.showEveryItemOnWideDisplays
+        displaySettings.wideDisplayRule.minimumWidth = Defaults.DefaultValue.wideDisplayMinimumWidth
     }
 }
