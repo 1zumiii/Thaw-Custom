@@ -23,7 +23,12 @@ final class ProfileManager {
     }
 
     /// The ID of the currently active profile, or nil.
-    var activeProfileID: UUID?
+    var activeProfileID: UUID? {
+        didSet { launchGate.record?.lastActiveProfileID = activeProfileID }
+    }
+
+    /// Keeps the active profile for the next launch and decides the switch at this one.
+    let launchGate: ProfileLaunchGate
 
     /// The last manifest write that failed in a non-throwing path, or nil.
     private(set) var lastManifestError: String?
@@ -35,22 +40,20 @@ final class ProfileManager {
         return lastManifestError
     }
 
-    private let diagLog = DiagLog(category: "ProfileManager")
+    let diagLog = DiagLog(category: "ProfileManager")
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let profilesDirectory: URL
     private let manifestURL: URL
     private(set) weak var appState: AppState?
     private var cancellables = Set<AnyCancellable>()
-    /// Tracks the last seen active display UUID for auto-switch debouncing.
-    private var lastActiveDisplayUUID: String?
     /// Tracks the last seen active Space key for auto-switch debouncing.
     private var lastActiveSpaceKey: String?
     /// Whether a Focus Filter profile is currently applied.
-    private var focusFilterActive = false
-    /// The in-flight layout apply task. Exposed for callers that need to
-    /// wait for the layout to finish (e.g. the Apply button).
+    private(set) var focusFilterActive = false
+    /// The in-flight layout apply and its profile, for callers that wait for it (e.g. the Apply button).
     private(set) var layoutTask: Task<Void, Never>?
+    private(set) var layoutTaskProfileID: UUID?
 
     /// Callers awaiting layoutTask use this to report an unavailable layout engine, even when profile settings applied.
     /// Cleared at the start of each apply.
@@ -60,10 +63,16 @@ final class ProfileManager {
     private var layoutGeneration: UInt = 0
 
     /// Clear the verdict and issue a reporting generation; separate from app relaunches so tests need no AppState.
-    func beginLayoutApply() -> UInt {
+    func beginLayoutApply(profileID: UUID? = nil) -> UInt {
         layoutDidNotRun = false
+        layoutTaskProfileID = profileID
         layoutGeneration &+= 1
         return layoutGeneration
+    }
+
+    private func endLayoutTask(generation: UInt) {
+        guard layoutGeneration == generation else { return }
+        layoutTask = nil
     }
 
     /// Ignore superseded failures so late tasks cannot overwrite a newer apply's clean verdict.
@@ -80,7 +89,8 @@ final class ProfileManager {
     private var profileHotkeyCancellables = Set<AnyCancellable>()
 
     /// - Parameter profilesDirectory: Profile and manifest directory; defaults to Application Support. Tests use temporary directories to protect user profiles.
-    init(profilesDirectory: URL? = nil) {
+    init(profilesDirectory: URL? = nil, launchRecord: ProfileLaunchApply.Record? = nil) {
+        launchGate = ProfileLaunchGate(record: launchRecord ?? (profilesDirectory == nil ? ProfileLaunchApply.Record() : nil))
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -114,14 +124,7 @@ final class ProfileManager {
     /// Apply the current display's associated profile only after the menu bar settles.
     func performSetup(with appState: AppState) {
         self.appState = appState
-        lastActiveDisplayUUID = Bridging.getActiveMenuBarDisplayUUID()
         rebuildProfileHotkeys()
-
-        let displaySwitchTask = NotificationCenter.default.eventsTask(named: NSApplication.didChangeScreenParametersNotification, debounce: .seconds(1.5)) { [weak self] in
-            guard let self else { return }
-            await self.checkDisplayAndAutoSwitch()
-        }
-        cancellables.insert(AnyCancellable { displaySwitchTask.cancel() })
 
         // Debounce beyond the Space animation so rapid swipes apply only the final profile.
         let spaceSwitchTask = NSWorkspace.shared.notificationCenter.eventsTask(named: NSWorkspace.activeSpaceDidChangeNotification, debounce: .seconds(0.75)) { [weak self] in
@@ -154,31 +157,30 @@ final class ProfileManager {
             }
             .store(in: &cancellables)
 
-        // Check if a Focus Filter is currently active. If so, apply it;
-        // otherwise fall back to display-based profile.
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let current = try await ThawFocusFilter.current
-                if current.profile != nil {
-                    _ = try await current.perform()
-                    await self.applyFocusFilterProfile()
-                    return
-                }
-            } catch {
-                diagLog.debug("No active Focus Filter on startup: \(error)")
-            }
-            // Without Focus, prefer Space over display; always apply spacing to correct offsets left by another display's session.
-            // Matching on-disk offsets no-op without relaunching.
-            let startupSpaceKey = SpaceInfo.activeSpace().persistentKey
-            self.lastActiveSpaceKey = startupSpaceKey
-            if let startupSpaceKey, self.profile(forSpaceKey: startupSpaceKey) != nil {
-                await self.applyProfileForSpace(key: startupSpaceKey)
+        Task { [weak self] in await self?.applyStartupProfile() }
+    }
+
+    /// Applies the active Focus Filter's profile, else the Space's, else the display's.
+    private func applyStartupProfile() async {
+        defer { launchGate.close() }
+        do {
+            let current = try await ThawFocusFilter.current
+            if current.profile != nil {
+                _ = try await current.perform()
+                await applyFocusFilterProfile()
                 return
             }
-            if let currentUUID = lastActiveDisplayUUID {
-                await self.applyProfileForDisplay(uuid: currentUUID)
-            }
+        } catch {
+            diagLog.debug("No active Focus Filter on startup: \(error)")
+        }
+        // Without Focus, prefer Space over display; always apply spacing to correct offsets left by another display's session.
+        // Matching on-disk offsets no-op without relaunching.
+        let startupSpaceKey = SpaceInfo.activeSpace().persistentKey
+        lastActiveSpaceKey = startupSpaceKey
+        if let startupSpaceKey, profile(forSpaceKey: startupSpaceKey) != nil {
+            await applyProfileForSpace(key: startupSpaceKey)
+        } else if let currentUUID = Bridging.getActiveMenuBarDisplayUUID() {
+            await applyProfileForDisplay(uuid: currentUUID)
         }
     }
 
@@ -282,11 +284,7 @@ final class ProfileManager {
 
     /// Apply spacing after settings; applyOffset avoids relaunches for matching on-disk offsets.
     /// Capture previousProfileID before changing activeProfileID so hooks receive THAW_PREVIOUS_PROFILE_ID.
-    func applyProfile(
-        _ profile: Profile,
-        to appState: AppState,
-        previousProfileID: UUID? = nil
-    ) {
+    func applyProfile(_ profile: Profile, to appState: AppState, previousProfileID: UUID? = nil, relaunchesApps: Bool = true) {
         diagLog.debug(
             "applyProfile entered: name=\(profile.name)"
         )
@@ -298,7 +296,7 @@ final class ProfileManager {
         // Cancel any in-flight layout task before starting a new one.
         // Prevents two profile applies from fighting over item positions.
         layoutTask?.cancel()
-        let generation = beginLayoutApply()
+        let generation = beginLayoutApply(profileID: profile.id)
 
         let pinnedHidden = Set(profile.menuBarLayout.pinnedHiddenBundleIDs)
         let pinnedAlwaysHidden = Set(profile.menuBarLayout.pinnedAlwaysHiddenBundleIDs)
@@ -347,7 +345,7 @@ final class ProfileManager {
                 return
             }
 
-            self?.applySnapshot(profile, to: appState)
+            self?.applySnapshot(profile, to: appState, relaunchesApps: relaunchesApps)
 
             // Apply spacing before layout: relaunches reset item positions; matching offsets no-op.
             // Arm settling before relaunch to suppress partial cache restores, then wait for reattachment before layout.
@@ -359,7 +357,7 @@ final class ProfileManager {
             do {
                 // An unstructured wave survives superseding layout-task cancellation; see sleepIgnoringCancellation(for:).
                 let outcome = try await Task {
-                    try await appState.spacingManager.applyOffset()
+                    try await appState.spacingManager.applyOffset(relaunchApps: relaunchesApps)
                 }.value
                 didRelaunch = outcome.didRelaunch
                 recovered = outcome.recoveredBundleIDs
@@ -400,9 +398,7 @@ final class ProfileManager {
 
             // Reverse pre-hook order for teardown; skip post-hooks when a newer apply cancels this task.
             if Task.isCancelled {
-                if self?.layoutGeneration == generation {
-                    self?.layoutTask = nil
-                }
+                self?.endLayoutTask(generation: generation)
                 return
             }
             await HookRunner.runIfEnabled(profilePost, context: HookRunner.Context(
@@ -415,9 +411,7 @@ final class ProfileManager {
             ))
             // Recheck cancellation after a long profile script to avoid firing global teardown for a superseded apply.
             if Task.isCancelled {
-                if self?.layoutGeneration == generation {
-                    self?.layoutTask = nil
-                }
+                self?.endLayoutTask(generation: generation)
                 return
             }
             await HookRunner.runIfEnabled(globalPost, context: HookRunner.Context(
@@ -429,13 +423,11 @@ final class ProfileManager {
                 previousProfileName: baseContext.previousName
             ))
 
-            if self?.layoutGeneration == generation {
-                self?.layoutTask = nil
-            }
+            self?.endLayoutTask(generation: generation)
         }
     }
 
-    private func applySnapshot(_ profile: Profile, to appState: AppState) {
+    private func applySnapshot(_ profile: Profile, to appState: AppState, relaunchesApps: Bool) {
         profile.generalSettings.apply(to: appState.settings.general)
         profile.advancedSettings.merged(onto: .capture(from: appState.settings.advanced)).apply(to: appState.settings.advanced)
 
@@ -464,7 +456,7 @@ final class ProfileManager {
 
         // Set before the configurations, whose change applies spacing under these settings.
         ProfileRelaunchSafety.apply(profile, to: appState.settings.displaySettings)
-        appState.settings.displaySettings.configurations = profile.displayConfigurations
+        appState.settings.displaySettings.assignConfigurations(profile.displayConfigurations, writeOnly: !relaunchesApps)
         appState.settings.displaySettings.unconfirmedSpacingProfileScope = profile.unconfirmedSpacingProfileScope
         appState.appearanceManager.configuration = profile.appearanceConfiguration
 
@@ -576,11 +568,14 @@ final class ProfileManager {
         let data = try encoder.encode(duplicate)
         try data.write(to: profileURL(for: duplicate.id), options: .atomic)
 
+        let source = profiles.first { $0.id == id }
         let metadata = ProfileMetadata(
             id: duplicate.id,
             name: duplicate.name,
             createdAt: duplicate.createdAt,
-            modifiedAt: duplicate.modifiedAt
+            modifiedAt: duplicate.modifiedAt,
+            keepsLayoutChangesSetting: source?.keepsLayoutChangesSetting,
+            reappliesAtLaunchSetting: source?.reappliesAtLaunchSetting
         )
         profiles.append(metadata)
         try saveManifest()
@@ -595,7 +590,9 @@ final class ProfileManager {
             associatedDisplayUUID: meta?.associatedDisplayUUID,
             associatedDisplayName: meta?.associatedDisplayName,
             associatedSpaceKey: meta?.associatedSpaceKey,
-            associatedSpaceName: meta?.associatedSpaceName
+            associatedSpaceName: meta?.associatedSpaceName,
+            keepsLayoutChanges: meta?.keepsLayoutChangesSetting,
+            reappliesAtLaunch: meta?.reappliesAtLaunchSetting
         )
         let bundle = ProfileExportBundle(entries: [entry])
         let data = try encoder.encode(bundle)
@@ -663,7 +660,7 @@ final class ProfileManager {
             from: itemManager.itemCache
         )
         let persistedSectionOrder = UserDefaults.standard.dictionary(
-            forKey: "MenuBarItemManager.savedSectionOrder"
+            forKey: SavedSectionOrderDefaults.key
         ) as? [String: [String]] ?? [:]
 
         // An empty cache without a display ID is not meaningful; preserve mirrored assignments rather than erase the profile.
@@ -919,7 +916,9 @@ final class ProfileManager {
                 associatedDisplayUUID: meta.associatedDisplayUUID,
                 associatedDisplayName: meta.associatedDisplayName,
                 associatedSpaceKey: meta.associatedSpaceKey,
-                associatedSpaceName: meta.associatedSpaceName
+                associatedSpaceName: meta.associatedSpaceName,
+                keepsLayoutChanges: meta.keepsLayoutChangesSetting,
+                reappliesAtLaunch: meta.reappliesAtLaunchSetting
             ))
         }
         let bundle = ProfileExportBundle(entries: entries)
@@ -966,11 +965,17 @@ final class ProfileManager {
         persistManifest()
     }
 
-    /// Clears the display association from whichever profile currently holds it.
-    func setAssociatedDisplay(uuid _: String?, forDisplayUUID displayUUID: String) {
-        for index in profiles.indices where profiles[index].associatedDisplayUUID == displayUUID {
-            profiles[index].associatedDisplayUUID = nil
-            profiles[index].associatedDisplayName = nil
+    // MARK: - Layout Behavior
+
+    /// Sets whether the profile keeps layout changes and whether it applies
+    /// again at launch. A nil argument leaves that switch as it is.
+    func setLayoutBehavior(keepsChanges: Bool? = nil, reappliesAtLaunch: Bool? = nil, forProfileID profileID: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
+        if let keepsChanges {
+            profiles[index].keepsLayoutChangesSetting = keepsChanges
+        }
+        if let reappliesAtLaunch {
+            profiles[index].reappliesAtLaunchSetting = reappliesAtLaunch
         }
         persistManifest()
     }
@@ -1040,26 +1045,6 @@ final class ProfileManager {
 
     // MARK: - Auto-Switch
 
-    /// Apply the new display's profile unless Focus or a Space association takes priority.
-    private func checkDisplayAndAutoSwitch() async {
-        guard let currentUUID = Bridging.getActiveMenuBarDisplayUUID() else { return }
-        guard currentUUID != lastActiveDisplayUUID else { return }
-        lastActiveDisplayUUID = currentUUID
-
-        // Don't override a Focus Filter profile with a display switch.
-        guard !focusFilterActive else { return }
-
-        // Explicit Space associations outrank incidental display changes such as docking, wake, or resolution changes.
-        if let spaceKey = SpaceInfo.activeSpace().persistentKey,
-           profile(forSpaceKey: spaceKey) != nil
-        {
-            diagLog.debug("Display auto-switch yielding to Space association \(spaceKey)")
-            return
-        }
-
-        await applyProfileForDisplay(uuid: currentUUID)
-    }
-
     /// Already-active guards make switches between Spaces sharing a profile no-ops.
     private func checkSpaceAndAutoSwitch() async {
         guard let key = SpaceInfo.activeSpace().persistentKey else {
@@ -1077,14 +1062,12 @@ final class ProfileManager {
     }
 
     /// Applies the profile requested by a Focus Filter activation.
-    func applyFocusFilterProfile() async {
-        guard let idString = UserDefaults.standard.string(
-            forKey: "FocusFilterRequestedProfileID"
-        ),
-            let profileID = UUID(uuidString: idString)
-        else { return }
+    func applyFocusFilterProfile(
+        requested idString: String? = UserDefaults.standard.string(forKey: "FocusFilterRequestedProfileID")
+    ) async {
+        guard let idString, let profileID = UUID(uuidString: idString) else { return }
 
-        guard profileID != activeProfileID else {
+        guard profileID != activeProfileID, !keepsLiveLayoutAtLaunch(profileID: profileID) else {
             focusFilterActive = true
             return
         }
@@ -1129,38 +1112,14 @@ final class ProfileManager {
 
     /// Applies the profile associated with the given display UUID, if any.
     private func applyProfileForDisplay(uuid: String) async {
-        guard let meta = profiles.first(where: { $0.associatedDisplayUUID == uuid }) else {
-            return
-        }
-        guard meta.id != activeProfileID else { return }
-        guard let appState else { return }
-
-        diagLog.info("Auto-switching to profile \(meta.name) for display \(uuid)")
-        do {
-            let profile = try loadProfile(id: meta.id)
-            let previousID = activeProfileID
-            activeProfileID = meta.id
-            applyProfile(profile, to: appState, previousProfileID: previousID)
-        } catch {
-            diagLog.error("Auto-switch failed: \(error)")
-        }
+        guard let meta = profiles.first(where: { $0.associatedDisplayUUID == uuid }), meta.id != activeProfileID, let appState else { return }
+        switchAutomatically(to: meta, on: appState, trigger: "display \(uuid)", relaunchesApps: false)
     }
 
     /// Applies the profile associated with the given Space key, if any.
     private func applyProfileForSpace(key: String) async {
-        guard let meta = profile(forSpaceKey: key) else { return }
-        guard meta.id != activeProfileID else { return }
-        guard let appState else { return }
-
-        diagLog.info("Auto-switching to profile \(meta.name) for Space \(key)")
-        do {
-            let profile = try loadProfile(id: meta.id)
-            let previousID = activeProfileID
-            activeProfileID = meta.id
-            applyProfile(profile, to: appState, previousProfileID: previousID)
-        } catch {
-            diagLog.error("Space auto-switch failed: \(error)")
-        }
+        guard let meta = profile(forSpaceKey: key), meta.id != activeProfileID, let appState else { return }
+        switchAutomatically(to: meta, on: appState, trigger: "Space \(key)")
     }
 
     /// Imports profiles from a file.
@@ -1187,7 +1146,9 @@ final class ProfileManager {
                 id: imported.id,
                 name: imported.name,
                 createdAt: imported.createdAt,
-                modifiedAt: imported.modifiedAt
+                modifiedAt: imported.modifiedAt,
+                keepsLayoutChangesSetting: entry.keepsLayoutChanges,
+                reappliesAtLaunchSetting: entry.reappliesAtLaunch
             )
             profiles.append(metadata)
 

@@ -41,7 +41,14 @@ final class SettingsProcessHost {
     /// Counts the launches, so a process that ends after another has started is not taken for it.
     private var generation = 0
     private var link: SettingsLinkEndpoint?
+    /// Whether messages still reach the settings process.
+    var isLinked: Bool {
+        link != nil
+    }
+
     private var updatesWatch: Task<Void, Never>?
+    /// Waits for the app's window to become key; a later window or the process ending cancels it.
+    private var shownInAppWait: Task<Void, Never>?
     private let diagLog = DiagLog(category: "SettingsProcessHost")
 
     init(
@@ -120,6 +127,28 @@ final class SettingsProcessHost {
         return true
     }
 
+    /// Tells a settings process that handed a pane over that the app's window is up, once that
+    /// window is key, so the process closes its own window only then.
+    func appWindowOpened(_ window: NSWindow) {
+        shownInAppWait?.cancel()
+        shownInAppWait = nil
+        guard link != nil else { return }
+        let becameKey = NotificationCenter.default.notifications(named: NSWindow.didBecomeKeyNotification, object: window)
+        guard !window.isKeyWindow else {
+            link?.send(.shownInApp)
+            return
+        }
+        shownInAppWait = Task { @MainActor [weak self] in
+            for await _ in becameKey {
+                self?.link?.send(.shownInApp)
+                break
+            }
+            if !Task.isCancelled {
+                self?.shownInAppWait = nil
+            }
+        }
+    }
+
     /// The process closed its end, so nothing more is sent to it.
     private func linkClosed(generation closed: Int) {
         guard closed == generation else { return }
@@ -134,6 +163,8 @@ final class SettingsProcessHost {
         link = nil
         updatesWatch?.cancel()
         updatesWatch = nil
+        shownInAppWait?.cancel()
+        shownInAppWait = nil
     }
 
     private func receive(_ message: SettingsLinkMessage) {
@@ -148,7 +179,7 @@ final class SettingsProcessHost {
             app.checkForUpdates()
         case .quit:
             app.quit()
-        case .show, .updatesState:
+        case .show, .updatesState, .shownInApp:
             break
         }
     }

@@ -146,10 +146,39 @@ struct MultiBarFramesTests {
         // Frames from a reconnect: the dividers parked at y 113.5 while Stats
         // still read on the bar, so Stats looked stranded among hidden items.
         let stats = Self.item(x: -400, windowID: 1)
+        let displays = [CGRect(x: -1920, y: 0, width: 1920, height: 1080)]
 
         let parked = divider(y: 113.5)
-        #expect(ControlOrderRules.dividerIsOffTheBar(ControlItemPair(hidden: parked, alwaysHidden: nil), among: [parked, stats]))
+        #expect(ControlOrderRules.dividerIsOffTheBar(ControlItemPair(hidden: parked, alwaysHidden: nil), among: [parked, stats], displays: displays))
         let onBar = divider(y: 4.5)
-        #expect(!ControlOrderRules.dividerIsOffTheBar(ControlItemPair(hidden: onBar, alwaysHidden: nil), among: [onBar, stats]))
+        #expect(!ControlOrderRules.dividerIsOffTheBar(ControlItemPair(hidden: onBar, alwaysHidden: nil), among: [onBar, stats], displays: displays))
+    }
+
+    @Test("A stand-in Hidden divider is not taken for one parked off the bar")
+    func standInDividerIsNotOffTheBar() {
+        let stats = Self.item(x: 3209, windowID: 1)
+        let standIns = CacheDividers.standIns(leadingX: 1920, alwaysHiddenEnabled: true, ownerPID: 501)
+        #expect(!ControlOrderRules.dividerIsOffTheBar(standIns, among: [stats], displays: Self.displays))
+    }
+
+    @Test("A real Hidden divider at x -1 or with an empty frame is still refused")
+    func realParkedDividerIsStillRefused() {
+        func divider(_ bounds: CGRect) -> ControlItemPair {
+            let hidden = MenuBarItem(
+                tag: .hiddenControlItem,
+                windowID: 9,
+                ownerPID: 501,
+                sourcePID: 501,
+                bounds: bounds,
+                title: ControlItemIdentifier.hidden.rawValue,
+                isOnScreen: false
+            )
+            return ControlItemPair(hidden: hidden, alwaysHidden: nil)
+        }
+        let stats = Self.item(x: 3209, windowID: 1)
+        let atMinusOne = divider(CGRect(x: -1, y: 4.5, width: 2, height: 24))
+        let empty = divider(CGRect(x: 1920, y: 0, width: 0, height: 0))
+        #expect(ControlOrderRules.dividerIsOffTheBar(atMinusOne, among: [stats], displays: Self.displays))
+        #expect(ControlOrderRules.dividerIsOffTheBar(empty, among: [stats], displays: Self.displays))
     }
 }

@@ -238,9 +238,7 @@ final class LayoutBarContainer: NSView {
             AnyCancellable { badgeColorTask.cancel() }
                 .store(in: &subscriptions)
 
-            // Observe screen parameter changes (moving between displays) to update badge
-            NotificationCenter.default
-                .publisher(for: NSApplication.didChangeScreenParametersNotification)
+            appState.displayEnvironment.settlements
                 .sink { [weak self] _ in
                     guard let self else { return }
                     // Force update badge's color info and redraw when screen changes
@@ -727,15 +725,14 @@ final class LayoutBarContainer: NSView {
             let insertionIndex = adjustedBadgeIndex.clamped(to: newViews.startIndex ... newViews.endIndex)
             newViews.insert(badgeView, at: insertionIndex)
         }
-        // A Visible item hidden because another item of its app is concealed
-        // is not on the bar; dim it so Layout does not claim otherwise.
-        if section == .visible {
-            for view in newViews {
-                guard let itemView = view as? LayoutBarItemView else { continue }
-                let hidingSection = appState.itemManager.sectionHidingItemWithItsApp(itemView.item, appState: appState)
-                itemView.alphaValue = hidingSection == nil ? 1 : 0.4
-                itemView.hiddenWithAppSection = hidingSection
-            }
+        // macOS hides an app as a whole, so an item of a split app can be on
+        // the bar or off it whatever its section says. A Visible item that is
+        // off the bar is dimmed so Layout does not claim otherwise.
+        for view in newViews {
+            guard let itemView = view as? LayoutBarItemView else { continue }
+            let override = appState.itemManager.appWideOverride(for: itemView.item, appState: appState)
+            itemView.alphaValue = override?.isOffTheBar == true ? 0.4 : 1
+            itemView.appWideOverride = override
         }
         arrangedViews = newViews
         newlyCreatedBadgeView?.animateAppearance()

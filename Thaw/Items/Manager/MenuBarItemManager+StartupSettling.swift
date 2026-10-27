@@ -87,7 +87,7 @@ extension MenuBarItemManager {
 
                 await cacheItemsRegardless(skipRecentMoveCheck: true, resolveSourcePID: true)
                 let managedCount = itemCache.managedItems.count
-                let unresolved = itemCache.managedItems.count(where: { $0.sourcePID == nil })
+                let unresolved = SettlingSourcePIDs.unresolvedCount(in: itemCache.managedItems)
                 let pidsOK = managedCount > 0 && unresolved <= 1
                 let minimumElapsed = settlingStartedAt.duration(to: .now) >= Self.startupMinimumSettlingDuration
                 let hostReady = menuBarHostItemsReady(in: itemCache)
@@ -181,8 +181,9 @@ extension MenuBarItemManager {
             )
             // A bar arranged by hand while Thaw was not running, or under an
             // older build, has to be read once before its sections can be.
+            // Only items with no section yet: Layout's sections win over stale weights.
             if adoptsObservedMembership {
-                adoptObservedMembership(reason: "settled launch")
+                adoptObservedMembership(reason: "settled launch", keepingAuthored: true)
             }
 
             // Once per launch, after login items register: hygiene asks
@@ -197,17 +198,7 @@ extension MenuBarItemManager {
                 }
             }
 
-            // Only a profile other than the one already in place is applied, so drags made since survive.
-            // Await it so applySavedLayout below cannot race it.
-            if let appState = self.appState,
-               ProfileSettleReapply.Record().settle(activeProfileID: appState.profileManager.activeProfileID)
-            {
-                MenuBarItemManager.diagLog.info(
-                    "\(reason): applying active display profile after settling"
-                )
-                appState.profileManager.reapplyActiveProfile()
-                await appState.profileManager.layoutTask?.value
-            }
+            await settleActiveProfile(reason: reason)
 
             MenuBarItemManager.diagLog.debug(
                 "\(reason): running fast restore without sourcePID resolution"
@@ -264,6 +255,24 @@ extension MenuBarItemManager {
     private func menuBarHostItemsReady(in cache: ItemCache) -> Bool {
         cache.managedItems.contains {
             $0.tag.namespace == .menuBarAgent || $0.tag.isBentoBox
+        }
+    }
+
+    /// Only a profile other than the one in place is applied, so drags made since survive. An apply started
+    /// here is awaited so applySavedLayout can't race it; one already running waits on this settle's task,
+    /// so awaiting it here would deadlock.
+    private func settleActiveProfile(reason: String) async {
+        guard let profiles = appState?.profileManager else { return }
+        switch ProfileSettleReapply.Record().settle(
+            activeProfileID: profiles.activeProfileID,
+            pendingApplyProfileID: profiles.pendingApplyProfileID
+        ) {
+        case .reapply:
+            MenuBarItemManager.diagLog.info("\(reason): applying active display profile after settling")
+            profiles.reapplyActiveProfile()
+            await profiles.layoutTask?.value
+        case .leavePendingApply, .keep:
+            break
         }
     }
 }

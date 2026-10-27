@@ -37,6 +37,17 @@ nonisolated enum MenuBarItemGeometry {
     /// item's sliver, not a glyph anything could be drawn under.
     static let phantomFramePeerMinimumWidth: CGFloat = 8
 
+    /// Whether a CG-global point is in this display's top bar, including optional hover retention.
+    static func contains(_ point: CGPoint, inTopBandOf display: CGRect, height: CGFloat, padding: CGFloat = 0) -> Bool {
+        display.contains(point) && point.y <= display.minY + height + padding
+    }
+
+    /// Whether the Visible control needs the Layout window's off-bar recovery path.
+    static func isStrandedVisibleControl(_ item: MenuBarItem, screens: [CGRect]) -> Bool {
+        item.tag.matchesVisibleControlItem
+            && barScreen(holding: item.bounds, among: screens) == nil
+    }
+
     /// The screen, of screenFrames in CG-global points, whose menu bar holds
     /// frame, or nil when frame is on no bar.
     ///

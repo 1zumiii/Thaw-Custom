@@ -278,7 +278,7 @@ final class LayoutBarPaddingView: NSView {
             container.appState?.layoutFeedback.post(
                 LayoutBarFeedbackCenter.Refusal(
                     title: String(
-                        localized: "“\(Constants.displayName)” couldn’t move to \(MenuBarSection.Name.visible.displayString)",
+                        localized: "“\(Constants.displayName)” couldn’t move to \(MenuBarSection.Name.visible.localizedName)",
                         comment: "Title shown when the Thaw control icon is dropped outside the Visible section"
                     ),
                     message: String(
@@ -657,8 +657,9 @@ final class LayoutBarPaddingView: NSView {
                 await appState.imageCache.recaptureNow(sections: MenuBarSection.Name.allCases)
             }
             do {
-                let recoveringStrandedVisibleControl = item.tag.matchesVisibleControlItem
-                    && (item.bounds.origin.x == MenuBarItemGeometry.transientSentinelX || item.bounds.midY > MenuBarItemGeometry.maxOnBarMidY)
+                let recoveringStrandedVisibleControl = MenuBarItemGeometry.isStrandedVisibleControl(
+                    item, screens: BarAxis.liveDisplayBounds()
+                )
                 let attemptMove = { () async throws -> Bool in
                     try await appState.itemManager.move(
                         item: item,
@@ -1274,8 +1275,9 @@ final class LayoutBarPaddingView: NSView {
             // Allow macOS a brief moment to settle, then retry once.
             try? await Task.sleep(for: .milliseconds(120))
             do {
-                let recoveringStrandedVisibleControl = item.tag.matchesVisibleControlItem
-                    && (item.bounds.origin.x == MenuBarItemGeometry.transientSentinelX || item.bounds.midY > MenuBarItemGeometry.maxOnBarMidY)
+                let recoveringStrandedVisibleControl = MenuBarItemGeometry.isStrandedVisibleControl(
+                    item, screens: BarAxis.liveDisplayBounds()
+                )
                 try await appState.itemManager.move(
                     item: item,
                     to: destination,
@@ -1319,9 +1321,8 @@ final class LayoutBarPaddingView: NSView {
             return
         }
 
-        NotificationCenter.default
-            .publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .receive(on: DispatchQueue.main)
+        // The notch is read from the settled displays.
+        appState.displayEnvironment.settlements
             .sink { [weak self] _ in
                 self?.updateNotchPresentation()
             }

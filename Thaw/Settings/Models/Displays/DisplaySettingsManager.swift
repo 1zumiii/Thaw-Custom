@@ -5,7 +5,6 @@
 //  Copyright (Thaw) © 2026 Toni Förster
 //  Licensed under the GNU GPLv3
 
-import AsyncAlgorithms
 import Cocoa
 import Combine
 import MenuBarModel
@@ -33,7 +32,9 @@ final class DisplaySettingsManager {
         didSet {
             guard oldValue != configurations else { return }
             persistConfigurations()
-            applyActiveDisplaySpacing(reason: "configurationsChanged")
+            applyActiveDisplaySpacing(
+                reason: Self.configurationsChangeReason(writeOnlyReason: writeOnlyConfigurationsReason)
+            )
         }
     }
 
@@ -118,13 +119,6 @@ final class DisplaySettingsManager {
     @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
 
-    /// Task backing the swift-async-algorithms screen-parameters debounce (see
-    /// configureObservers()). Held so it is cancelled in deinit,
-    /// matching the lifetime of the Combine cancellables above; its notification
-    /// observer is owned inside the task and removed when it ends.
-    @ObservationIgnored
-    private var screenParametersTask: Task<Void, Never>?
-
     @ObservationIgnored
     private let encoder = JSONEncoder()
 
@@ -137,10 +131,14 @@ final class DisplaySettingsManager {
     private weak var appState: AppState?
 
     /// UUID of the active menu bar display the last time spacing was applied.
-    /// Used to skip didChangeScreenParametersNotification fires that only
-    /// reflect a resolution or other-parameter change on the same display.
+    /// Used to skip display changes that only reflect a resolution or
+    /// other-parameter change on the same display.
     /// Internal access so unit tests in ThawTests can seed and assert it.
     var lastAppliedActiveDisplayUUID: String?
+
+    /// Set while a configuration change must only write spacing: seeding a new display or a display-driven profile.
+    @ObservationIgnored
+    var writeOnlyConfigurationsReason: String?
 
     /// UUID of the display that currently owns the menu bar, or nil if it
     /// cannot be determined. Exposed for views that need to decide whether
@@ -170,9 +168,8 @@ final class DisplaySettingsManager {
     }
 
     /// Merges info for currently-connected displays into the knownDisplays
-    /// cache. Idempotent and cheap; called on launch and on every
-    /// screen-parameters-changed notification so the cache always reflects
-    /// the latest known names.
+    /// cache. Idempotent and cheap; called on launch and on every settled
+    /// display change so the cache always reflects the latest known names.
     ///
     /// Skips screens whose localizedName is empty: that can happen for
     /// mirrored slave displays or briefly during GPU/sleep transitions, and
@@ -208,7 +205,9 @@ final class DisplaySettingsManager {
             knownDisplays = updated
         }
         if configurationsChanged {
+            writeOnlyConfigurationsReason = "displaySeeded"
             configurations = seededConfigurations
+            writeOnlyConfigurationsReason = nil
         }
     }
 
@@ -331,13 +330,6 @@ final class DisplaySettingsManager {
         }
     }
 
-    deinit {
-        // Combine cancellables tear down automatically; the async-algorithms
-        // screen-parameters task is manually owned, so cancel it here. Ending
-        // the task runs its defer, which removes the notification observer.
-        screenParametersTask?.cancel()
-    }
-
     // MARK: - Persistence
 
     /// Encodes and persists configurations. Called from configurations's
@@ -353,35 +345,31 @@ final class DisplaySettingsManager {
         }
     }
 
-    /// Configures the manager's non-persistence internal observers: the
-    /// debounced screen-parameters watcher and the Settings-URI notification
-    /// subscription. Persistence is not here, it is driven by didSet on
-    /// each property (see the property declarations above).
+    /// The display-change coordinator's seed step, once per settled change.
+    func seedConnectedDisplays() {
+        diagLog.info(DiagnosticLines.screensChanged(NSScreen.managedScreens))
+        captureCurrentlyConnectedDisplays()
+    }
+
+    /// The display-change coordinator's spacing step. A display change only
+    /// writes the value, so it never relaunches apps.
+    func applySpacingForDisplayChange() {
+        let currentUUID = Bridging.getActiveMenuBarDisplayUUID()
+        guard let reason = Self.displayChangeSpacingReason(
+            currentActiveDisplayUUID: currentUUID,
+            lastAppliedActiveDisplayUUID: lastAppliedActiveDisplayUUID
+        ) else {
+            diagLog.info("Active menu bar display unchanged (\(currentUUID ?? "nil")); skipping spacing apply")
+            return
+        }
+        applyActiveDisplaySpacing(reason: reason)
+    }
+
+    /// Configures the Settings-URI notification subscription. Display changes
+    /// reach this manager through the display-change coordinator, and
+    /// persistence is driven by didSet on each property.
     private func configureObservers() {
         var c = Set<AnyCancellable>()
-
-        // Logs display connect/disconnect, refreshes the known-display cache and
-        // re-derives the active display's spacing.
-        //
-        // Debounced by one second because docking, lid close, sleep/wake, KVM
-        // switches, Sidecar and display flicker each post several notifications
-        // within a few hundred milliseconds, and each could trigger a relaunch
-        // wave (the no-op guard misses values that oscillate during the flap).
-        // A skipped event returns from this one run; the next event runs again.
-        screenParametersTask = NotificationCenter.default.eventsTask(named: NSApplication.didChangeScreenParametersNotification, debounce: .seconds(1)) { [weak self] in
-            guard let self else { return }
-            diagLog.info(DiagnosticLines.screensChanged(NSScreen.managedScreens))
-            captureCurrentlyConnectedDisplays()
-            let currentUUID = Bridging.getActiveMenuBarDisplayUUID()
-            if Self.shouldSkipSpacingApply(
-                currentActiveDisplayUUID: currentUUID,
-                lastAppliedActiveDisplayUUID: lastAppliedActiveDisplayUUID
-            ) {
-                diagLog.info("Active menu bar display unchanged (\(currentUUID ?? "nil")); skipping spacing apply")
-                return
-            }
-            applyActiveDisplaySpacing(reason: "screenParametersChanged")
-        }
 
         // Re-deriving spacing on per-display configuration changes lives in
         // configurations's didSet; applyOffset's no-op guard keeps it free.
@@ -396,19 +384,6 @@ final class DisplaySettingsManager {
             .store(in: &c)
 
         cancellables = c
-    }
-
-    /// Whether a screen-parameters change should be ignored because the active
-    /// menu bar display is unchanged. A resolution change, lid open/close or
-    /// sleep transition that leaves the UUID the same is not a reason to
-    /// re-apply spacing and risk a relaunch wave.
-    ///
-    /// Pure on its inputs so it can be tested without AppState or real events.
-    static func shouldSkipSpacingApply(
-        currentActiveDisplayUUID currentUUID: String?,
-        lastAppliedActiveDisplayUUID lastUUID: String?
-    ) -> Bool {
-        currentUUID == lastUUID
     }
 
     /// Reads the active display's spacing offset and applies it.
@@ -432,15 +407,6 @@ final class DisplaySettingsManager {
         )
     }
 
-    /// Whether to ask before a relaunch wave. Write-only mode relaunches
-    /// nothing, so it never asks, whatever the confirmation toggle says.
-    static func needsSpacingRelaunchConfirmation(
-        applyMode: SpacingApplyMode,
-        confirmationsEnabled: Bool
-    ) -> Bool {
-        applyMode == .relaunchApps && confirmationsEnabled
-    }
-
     private func applyActiveDisplaySpacing(reason: String, forceRelaunch: Bool = false) {
         guard let appState else { return }
         let desired = Int(configurationForActiveDisplay().itemSpacingOffset.rounded())
@@ -448,7 +414,7 @@ final class DisplaySettingsManager {
         // every menu bar app for it, Chrome included, was far worse than a
         // gap that is off until those apps next launch, so a display change
         // only writes the new display's value. Reapply Spacing applies it now.
-        let relaunchApps = reason != "screenParametersChanged"
+        let relaunchApps = Self.spacingApplyRelaunchesApps(reason: reason)
         if !relaunchApps, appState.spacingManager.willRelaunch(forOffset: desired) {
             diagLog.info("Active display changed; saving spacing \(desired) without relaunching menu bar apps")
         }

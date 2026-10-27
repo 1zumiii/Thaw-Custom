@@ -153,11 +153,11 @@ enum MenuBarSearchItemActions {
         let observed = MoveLanding.observedSection(
             of: current,
             liveItems: manager.itemCache.managedItems,
-            dividers: manager.lastKnownControlItems
+            dividers: manager.cacheDividers()
         )
         let message = MoveResultMessage.make(
             itemName: item.displayName,
-            sectionTitle: title(for: section),
+            sectionTitle: section.localizedName,
             committed: committed,
             landed: MoveLanding.landed(
                 in: section,
@@ -191,13 +191,6 @@ enum MenuBarSearchItemActions {
         SettingsSearchNavigation.selectSidebarPane(.menuBarLayout, navigationState: appState.navigationState)
         appState.activate(withPolicy: .regular)
         appState.openWindow(.settings)
-    }
-
-    // MARK: Menu construction
-
-    /// Resolve the same section-name resource used by SwiftUI for an AppKit menu title.
-    static func title(for name: MenuBarSection.Name) -> String {
-        String(localized: name.localized)
     }
 
     // MARK: Move policy

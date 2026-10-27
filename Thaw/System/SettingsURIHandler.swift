@@ -87,7 +87,7 @@ enum SettingsURIHandler {
         "autoZenWhileSharingScreen": SettingURIEntry(defaultsKey: .autoZenWhileSharingScreen, kind: .boolean, isWritable: true),
         "enableDiagnosticLogging": SettingURIEntry(defaultsKey: .enableDiagnosticLogging, kind: .boolean, isWritable: true),
         "enableMenuBarItemOverflow": SettingURIEntry(defaultsKey: .enableMenuBarItemOverflow, kind: .boolean, isWritable: true),
-        "enableExperimentalSystemItemHiding": SettingURIEntry(defaultsKey: .enableExperimentalSystemItemHiding, kind: .boolean, isWritable: true),
+        "enableExperimentalSystemItemHiding": SettingURIEntry(defaultsKey: .enableExperimentalSystemItemHiding, kind: .boolean, isWritable: false),
         "enableExperimentalOverflowPrevention": SettingURIEntry(defaultsKey: .enableExperimentalOverflowPrevention, kind: .boolean, isWritable: true),
         "alwaysUseAppIconForMenuBarItems": SettingURIEntry(defaultsKey: .alwaysUseAppIconForMenuBarItems, kind: .boolean, isWritable: true),
         "enableMenuBarItemDescenders": SettingURIEntry(defaultsKey: .enableMenuBarItemDescenders, kind: .boolean, isWritable: true),
@@ -389,7 +389,7 @@ enum SettingsURIHandler {
 
     /// Unset keys use shipped defaults registered through object(forKey:).
     private static func effectiveBool(for entry: SettingURIEntry) -> Bool {
-        (Defaults.object(forKey: entry.defaultsKey) as? Bool) ?? false
+        computedBooleans[entry.defaultsKey]?() ?? (Defaults.object(forKey: entry.defaultsKey) as? Bool) ?? false
     }
 
     /// Reads a double setting's effective value, with the same registered-default
@@ -466,12 +466,6 @@ enum SettingsURIHandler {
     }
 
     private static func applyBooleanSetting(_ value: Bool, key: String, entry: SettingURIEntry) -> Bool {
-        if entry.defaultsKey == .enableExperimentalSystemItemHiding,
-           value, Defaults.bool(forKey: .enableNativeAppHiding)
-        {
-            diagLog.warning("Settings URI: Cannot enable system item hiding while native app hiding is enabled")
-            return false
-        }
         Defaults.set(value, forKey: entry.defaultsKey)
         postSettingsDidChangeNotification(key: key, value: value)
         return true

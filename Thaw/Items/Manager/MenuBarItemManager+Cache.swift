@@ -240,7 +240,7 @@ extension MenuBarItemManager {
 
         // Reset isRestoringItemOrder if it's been stuck for too long (10 seconds).
         // This prevents stale flags from blocking saves after user manual moves.
-        if isRestoringItemOrder, let timestamp = isRestoringItemOrderTimestamp, Date().timeIntervalSince(timestamp) > 10 {
+        if isRestoringItemOrder, let timestamp = isRestoringItemOrderTimestamp, timestamp.duration(to: .now) > .seconds(10) {
             MenuBarItemManager.diagLog.debug("Resetting stale isRestoringItemOrder flag (timeout)")
             isRestoringItemOrder = false
             isRestoringItemOrderTimestamp = nil
@@ -357,9 +357,11 @@ extension MenuBarItemManager {
         from cache: ItemCache,
         controlItems: ControlItemPair? = nil,
         placedByUser: Bool = false,
-        displays: [CGRect] = activeDisplayBounds()
+        displays: [CGRect] = BarAxis.liveDisplayBounds(),
+        controller: (any MenuBarSectionControlling)? = nil
     ) {
-        let isAnySectionRevealed = appState?.menuBarManager.sectionController.revealedSection != nil
+        let controller = controller ?? appState?.menuBarManager.sectionController
+        let isAnySectionRevealed = controller?.revealedSection != nil
         let shouldPersistLayoutSnapshot = !isNotificationCenterLayoutSuspended
             && !isAnySectionRevealed
             && LayoutSolver.shouldPersistSavedOrder(
@@ -376,14 +378,14 @@ extension MenuBarItemManager {
             MenuBarItemManager.diagLog.debug("Not mirroring section order: item frames span more than one bar")
             return
         }
-        if let controlItems, ControlOrderRules.dividerIsOffTheBar(controlItems, among: cache[.visible]) {
+        if let controlItems, ControlOrderRules.dividerIsOffTheBar(controlItems, among: cache[.visible], displays: displays) {
             MenuBarItemManager.diagLog.debug("Not mirroring section order: the Hidden divider is parked off the bar")
             return
         }
 
         // Consolidate split groups before mirroring them back into savedSectionOrder.
         // Persistence guards ensure no move is in flight; healthy records incur no write or refresh.
-        appState?.menuBarManager.sectionController.repairGroupInvariantIfNeeded()
+        controller?.repairGroupInvariantIfNeeded()
 
         // Mirror RuntimeSectionController membership and cached order to keep profiles, defaults, and layout bars synchronized.
         // Preserve pending authored Visible edits over old geometry; otherwise mirror command-drags the controller cannot observe (hidden sections have no live geometry).
@@ -403,16 +405,13 @@ extension MenuBarItemManager {
         defer {
             if preservedVisible != nil {
                 scheduleArrivalOrderRestore()
+            } else {
+                savedOrderMirrorGate.noteMirrored()
             }
         }
-        guard resolvedMirrored != savedSectionOrder else {
-            return
-        }
-        savedSectionOrder = resolvedMirrored
-        persistSavedSectionOrder()
-        MenuBarItemManager.diagLog.debug(
-            "Mirrored macOS 27 section order: \(resolvedMirrored.mapValues(\.count))"
-        )
+        // The controller's record follows every accepted mirror, equal or not, or a
+        // ⌘-drag it cannot observe would leave it behind until a membership change.
+        adoptMirroredOrder(resolvedMirrored, controller: controller)
     }
 
     /// Coalesce environment and cache rebalances to prevent assertion-reflow feedback.
@@ -477,39 +476,17 @@ extension MenuBarItemManager {
         }
     }
 
-    /// macOS 27 exposes neither AX elements nor windows for zero-length dividers; synthesize them rather than clearing the cache.
-    /// Place dividers at the display's leading edge so real items classify as visible; include always-hidden only when enabled.
-    private func synthesizedControlItemPair(
-        displayID: CGDirectDisplayID?,
-        hiddenControlItemWID: CGWindowID?,
-        alwaysHiddenControlItemWID: CGWindowID?
-    ) -> ControlItemPair {
-        let ourPID = ProcessInfo.processInfo.processIdentifier
-        let leadingX = displayID.map { CGDisplayBounds($0).minX } ?? (NSScreen.main?.frame.minX ?? 0)
-        let syntheticHidden = MenuBarItem(
-            tag: .hiddenControlItem,
-            windowID: hiddenControlItemWID ?? 0,
-            ownerPID: ourPID,
-            sourcePID: ourPID,
-            bounds: CGRect(x: leadingX, y: 0, width: 0, height: 0),
-            title: ControlItem.Identifier.hidden.rawValue,
-            isOnScreen: false
+    /// The dividers for a pass that works off the item cache, which drops them: the pair the last
+    /// walk found, otherwise stand-ins at the leading edge of the display the pass works on.
+    func cacheDividers(on displayID: CGDirectDisplayID? = nil) -> ControlItemPair {
+        let display = displayID ?? itemCache.displayID ?? Bridging.getActiveMenuBarDisplayID()
+        return CacheDividers.pair(
+            live: lastKnownControlItems,
+            // NSScreen.main is the screen with the key window, so it is only the last fallback.
+            leadingX: CacheDividers.leadingX(display: display.map { CGDisplayBounds($0) }, mainScreen: NSScreen.main?.frame),
+            alwaysHiddenEnabled: configuration.isAlwaysHiddenSectionEnabled,
+            ownerPID: ProcessInfo.processInfo.processIdentifier
         )
-        let syntheticAlwaysHidden: MenuBarItem? = {
-            guard configuration.isAlwaysHiddenSectionEnabled == true else {
-                return nil
-            }
-            return MenuBarItem(
-                tag: .alwaysHiddenControlItem,
-                windowID: alwaysHiddenControlItemWID ?? 0,
-                ownerPID: ourPID,
-                sourcePID: ourPID,
-                bounds: CGRect(x: leadingX, y: 0, width: 0, height: 0),
-                title: ControlItem.Identifier.alwaysHidden.rawValue,
-                isOnScreen: false
-            )
-        }()
-        return ControlItemPair(hidden: syntheticHidden, alwaysHidden: syntheticAlwaysHidden)
     }
 
     /// Retain the last good cache across control publication gaps to avoid vanishing icons and losing recovery snapshots.
@@ -554,11 +531,9 @@ extension MenuBarItemManager {
         }
 
         if MenuBarBackendProvider.current.canSynthesizeControlItems(snapshotItems: items) {
-            let controlItems = synthesizedControlItemPair(
-                displayID: displayID,
-                hiddenControlItemWID: hiddenControlItemWID,
-                alwaysHiddenControlItemWID: alwaysHiddenControlItemWID
-            )
+            // macOS 27 exposes no AX element or window for zero-length dividers, so no live pair is known any more.
+            lastKnownControlItems = nil
+            let controlItems = cacheDividers(on: displayID)
             await MainActor.run {
                 self.areControlItemsMissing = false
             }
@@ -668,7 +643,7 @@ extension MenuBarItemManager {
             scheduleCoalescedCacheRerun()
             return
         }
-        onScreenItemSnapshot.update(inventory.freshItems.filter(\.isOnScreen))
+        onScreenItemSnapshot.update(inventory.freshItems.filter(\.isOnScreen), fromCompleteWalk: inventory.completed)
 
         MenuBarItemManager.diagLog.debug("cacheItemsRegardless: getMenuBarItems returned \(items.count) items")
 
@@ -743,10 +718,18 @@ extension MenuBarItemManager {
         // Seed corrected source-PID identities for known windows so relocation does not treat them as arrivals.
         // Skip unresolved PIDs to keep the placeholder Control Center namespace out of persisted identities.
         if !previousWindowIDs.isEmpty {
-            let previous = Set(previousWindowIDs)
+            let previousIdentifiers = Dictionary(
+                itemCache.managedItems.map { ($0.windowID, $0.uniqueIdentifier) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let seeds = KnownIdentitySeeding.learned(
+                current: items.map { .init(windowID: $0.windowID, identifier: $0.uniqueIdentifier, hasSourcePID: $0.sourcePID != nil) },
+                previousIdentifiers: previousIdentifiers,
+                known: knownItemIdentifiers
+            )
             var learned = false
-            for item in items where previous.contains(item.windowID) && item.sourcePID != nil {
-                learned = knownItemIdentifiers.insert(item.uniqueIdentifier).inserted || learned
+            for seed in seeds {
+                learned = knownItemIdentifiers.insert(seed).inserted || learned
             }
             // Saved only when something was learned: the write posts a defaults change to every observer.
             if learned {
@@ -817,7 +800,7 @@ extension MenuBarItemManager {
 
         // Partial inventory can populate the editor, but cannot authorize
         // boundary repairs or replace saved order with retained geometry.
-        lastKnownControlItems = controlItems
+        lastKnownControlItems = CacheDividers.live(controlItems)
         if !inventory.hasFreshKnownInventory {
             await uncheckedCacheItems(items: items, controlItems: controlItems, displayID: displayID, publicationGeneration: publicationGeneration, observationOnly: true)
             return
@@ -860,7 +843,7 @@ extension MenuBarItemManager {
 
         // Retain resolved dividers for synchronous drop-handler pre-seating, which cannot afford another AX walk.
         await MainActor.run {
-            self.lastKnownControlItems = controlItems
+            self.lastKnownControlItems = CacheDividers.live(controlItems)
         }
 
         // applySavedLayout owns cooldowns; profile apply marks restoring and recaches, while rejection leaves current-cache persistence enabled.

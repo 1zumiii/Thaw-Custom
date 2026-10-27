@@ -131,7 +131,7 @@ nonisolated extension SearchIndex {
             title: "Move items that don’t fit into Hidden",
             descriptionText: String(localized: "When the menu bar is full, move the Visible items that don’t fit into Hidden and open them from the \(Constants.displayName) Bar."),
             pane: .menuBarLayout,
-            section: "More layout options",
+            section: "Overflow and previews",
             keywords: ["overflow", "notch", "fit", "visible", "hidden", "advanced layout controls"],
             property: .advanced("enableMenuBarItemOverflow")
         ),
@@ -158,11 +158,11 @@ nonisolated extension SearchIndex {
         SearchEntry(
             id: "advanced.enableNativeAppHiding",
             title: "Hiding method",
-            descriptionText: String(localized: "Native keeps Live Activities, the camera indicator and Apple’s own items on the menu bar. Standard hides any app’s items. Everything also hides Clock, Control Center and Siri."),
+            descriptionText: String(localized: "Native keeps Live Activities, the camera indicator and Apple’s own items on the menu bar. Standard hides any app’s items, and Clock, Control Center and Siri too."),
             pane: .menuBarLayout,
             section: "Hiding",
             keywords: [
-                "live activities", "camera", "microphone", "indicator", "native", "standard", "everything", "hiding", "method", "beta",
+                "live activities", "camera", "microphone", "indicator", "native", "standard", "everything", "hiding", "method",
                 "notification center", "clock", "control center", "siri",
             ],
             property: .advanced("enableNativeAppHiding")

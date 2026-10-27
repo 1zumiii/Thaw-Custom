@@ -72,12 +72,12 @@ extension MenuBarItemManager {
         // Apps answer different methods, so try them cheapest first, stop at
         // the first one the owner reacts to, and start there next time.
         let identity = openMethodIdentity(for: item)
-        let learned = learnedOpenMethod(for: identity)
+        let learned = LearnedOpenMethods.standard.method(for: identity)
         let showInMenuBar = appState?.settings.general.openHiddenItemsInMenuBar ?? false
         for method in ConcealedItemOpenMethod.openMethodOrder(for: mouseButton, learned: learned, showInMenuBar: showInMenuBar) {
             let opened = switch method {
-            case .pressInPlace:
-                await pressConcealedItemInPlace(item)
+            case .pressInPlace, .showMenuInPlace:
+                await pressConcealedItemInPlace(item, method: method)
             case .revealInPlace:
                 await revealInPlaceAndClick(item: item, with: mouseButton, on: displayID, controller: controller)
             }
@@ -86,7 +86,7 @@ extension MenuBarItemManager {
                     "clickConcealedItem: opened \(item.logString) via \(method.rawValue)"
                 )
                 menusOpenedByClick[key] = ownerMenuWindowIDs(item).subtracting(menusBefore)
-                rememberOpenMethod(method, for: identity)
+                LearnedOpenMethods.standard.record(method, for: identity, clickedWith: mouseButton)
                 return .completed(reactionObserved: true)
             }
             MenuBarItemManager.diagLog.debug(
@@ -96,7 +96,7 @@ extension MenuBarItemManager {
 
         // Nothing opened it. Leave it in the bar for the temporary-show
         // interval so the user can click the real icon.
-        forgetOpenMethod(for: identity)
+        LearnedOpenMethods.standard.record(nil, for: identity, clickedWith: mouseButton)
         MenuBarItemManager.diagLog.warning(
             "clickConcealedItem: no method opened \(item.logString); leaving it shown in the menu bar"
         )
@@ -118,7 +118,10 @@ extension MenuBarItemManager {
     /// Presses the item's AX element without revealing it. Returns whether the
     /// owner reacted. The extras-bar press is frame-matched, so it goes first;
     /// the hosted press covers MenuBarAgent's parked, frameless elements.
-    private func pressConcealedItemInPlace(_ item: MenuBarItem) async -> Bool {
+    private func pressConcealedItemInPlace(_ item: MenuBarItem, method: ConcealedItemOpenMethod = .pressInPlace) async -> Bool {
+        if method == .showMenuInPlace {
+            return await InPlaceMenuOpener.showMenu(for: item, pid: resolvedPID(for: item))
+        }
         let snapshot = ClickReactionVerifier.snapshot(for: item)
         let ownPress = await pressItemViaAccessibility(item)
         var pressed = ownPress
@@ -131,7 +134,7 @@ extension MenuBarItemManager {
             )
             return false
         }
-        let reaction = await ClickReactionVerifier.verify(against: snapshot)
+        let reaction = await ClickReactionVerifier.verifyAllowingLateOpen(against: snapshot)
         MenuBarItemManager.diagLog.debug(
             "pressInPlace: pressed \(item.logString) via \(ownPress ? "own bar" : "hosted"); reacted=\(reaction.didReact)"
         )

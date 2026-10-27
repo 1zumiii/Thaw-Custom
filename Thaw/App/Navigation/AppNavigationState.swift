@@ -15,8 +15,12 @@ import ThawCapture
 final class AppNavigationState {
     nonisolated enum SettingsDisclosure: Hashable {
         case layoutSpacers
-        /// The Thaw Bar page's app-wide options disclosure.
-        case thawBarAppWideOptions
+        /// Layout's Options tab, which holds the settings you rarely change.
+        case layoutOptions
+        case layoutAppleItems
+        /// Appearance's fill tabs, inside and behind the shape.
+        case appearanceInsideShape
+        case appearanceBehindShape
     }
 
     var isAppFrontmost = false
@@ -99,6 +103,9 @@ final class AppNavigationState {
 
     var requestedSettingsDisclosure: SettingsDisclosure?
 
+    /// The section of the search result being opened, so a page with tabs opens the tab holding it.
+    var requestedSettingsSection: String?
+
     /// AppState selects About after window construction; the pane consumes this upgrade request by presenting the changelog.
     var isWhatsNewRequested = false
 
@@ -110,19 +117,14 @@ final class AppNavigationState {
                 settingsNavigationIdentifier = destination
                 return
             }
+            // A search sets its section after the page, so only a section left from another page is dropped.
+            if settingsNavigationIdentifier != oldValue {
+                requestedSettingsSection = nil
+            }
             Defaults.set(settingsNavigationIdentifier.rawValue, forKey: .lastSettingsPane)
             // Which pane is showing decides whether capture is on, so moving
             // from General to Layout has to re-evaluate without a window toggle.
             updateCaptureUIState()
-        }
-    }
-
-    /// Raw values of sidebar destinations the user has hidden. Hidden panes
-    /// stay reachable via search and thaw://; they just leave the sidebar list.
-    var hiddenSidebarPanes: Set<String> = [] {
-        didSet {
-            let array = hiddenSidebarPanes.sorted()
-            Defaults.set(array, forKey: .hiddenSidebarPanes)
         }
     }
 
@@ -137,8 +139,7 @@ final class AppNavigationState {
                 settingsNavigationIdentifier = pane
             }
         }
-        if let raw = Defaults.stringArray(forKey: .hiddenSidebarPanes) {
-            hiddenSidebarPanes = Set(raw)
-        }
+        // Panes hidden by the old customizable sidebar show again.
+        Defaults.removeObject(forKey: .hiddenSidebarPanes)
     }
 }

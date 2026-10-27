@@ -59,10 +59,7 @@ final class MenuBarSection {
         capacity: MenuBarCapacitySnapshot,
         allowHidingApplicationMenus: Bool
     ) -> PresentationMode {
-        if let inlineWidth = capacity.availableWidth(
-            in: .inline,
-            applicationMenus: .visible
-        ), totalItemsWidth <= inlineWidth {
+        if let inlineWidth = capacity.availableWidth(applicationMenus: .visible), totalItemsWidth <= inlineWidth {
             return .inline
         }
 
@@ -70,10 +67,7 @@ final class MenuBarSection {
             return .thawBar
         }
 
-        if let inlineWidthWithoutAppMenus = capacity.availableWidth(
-            in: .inline,
-            applicationMenus: .hidden
-        ), totalItemsWidth <= inlineWidthWithoutAppMenus {
+        if let inlineWidthWithoutAppMenus = capacity.availableWidth(applicationMenus: .hidden), totalItemsWidth <= inlineWidthWithoutAppMenus {
             return .inlineHidingApplicationMenus
         }
 
@@ -87,7 +81,7 @@ final class MenuBarSection {
         allowHidingApplicationMenus: Bool
     ) -> Bool {
         let menus: MenuBarCapacitySnapshot.ApplicationMenus = allowHidingApplicationMenus ? .hidden : .visible
-        guard let width = capacity.availableWidth(in: .inline, applicationMenus: menus) else {
+        guard let width = capacity.availableWidth(applicationMenus: menus) else {
             return false
         }
         return totalItemsWidth > width
@@ -215,11 +209,11 @@ final class MenuBarSection {
         self.init(name: name, controlItem: controlItem)
     }
 
-    func performSetup(with appState: AppState) {
+    func performSetup(with appState: AppState, displays: DisplayEnvironment) {
         self.appState = appState
         configuration = appState.settings
         menuOpenMonitor = appState.itemManager.menuOpenMonitor
-        controlItem.performSetup(with: appState)
+        controlItem.performSetup(with: appState, displayInvalidations: displays.invalidations)
         desiredState = controlItem.state
     }
 
@@ -375,15 +369,10 @@ final class MenuBarSection {
     /// Pointer activity in either bar defers rehide.
     private func isMouseInsideActiveArea() -> Bool {
         guard let appState else { return false }
-        if let screen = appState.hidEventManager.bestScreen(appState: appState),
-           appState.hidEventManager.isMouseInsideMenuBarHoverBand(appState: appState, screen: screen)
-        {
-            return true
-        }
-        if appState.hidEventManager.isMouseInsideThawBar(appState: appState) {
-            return true
-        }
-        return false
+        let hidEventManager = appState.hidEventManager
+        return NSScreen.screens.contains {
+            hidEventManager.isMouseInsideMenuBarHoverBand(appState: appState, screen: $0)
+        } || hidEventManager.isMouseInsideThawBar(appState: appState)
     }
 
     private func startRehideChecks() {
@@ -413,18 +402,8 @@ final class MenuBarSection {
                 guard now - Context.lastTime.withLock({ $0 }) > 0.05 else { return event }
                 Context.lastTime.withLock { $0 = now }
 
-                guard
-                    let self,
-                    let appState,
-                    let screen = NSScreen.main
-                else {
-                    return event
-                }
-                let mouseInActiveArea =
-                    NSEvent.mouseLocation.y >= screen.visibleFrame.maxY ||
-                    appState.hidEventManager.isMouseInsideThawBar(appState: appState)
-
-                if !mouseInActiveArea {
+                guard let self, appState != nil else { return event }
+                if !isMouseInsideActiveArea() {
                     if rehideTask == nil {
                         rehideTask = makeRehideTask(interval: configuration.rehideInterval) { [weak self] in
                             self?.diagLog.debug("Open menu detected - restarting timed rehide task")

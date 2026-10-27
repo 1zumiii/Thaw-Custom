@@ -32,22 +32,36 @@ struct HookRunnerTests {
         return url
     }
 
+    /// Long enough that a busy CI runner can't time out a script that returns at once.
+    /// The default five seconds once ran out before an echo did.
+    private static let roomyTimeout: Double = 60
+
     @Test
     func `a script that finishes in time reports its output and the profile it ran for`() async throws {
         let url = try script("echo \"$THAW_PROFILE_NAME $THAW_HOOK_PHASE\"")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let outcome = try await HookRunner.run(HookScript(path: url.path), context: Self.context)
+        let outcome = try await HookRunner.run(HookScript(path: url.path, timeoutSeconds: Self.roomyTimeout), context: Self.context)
 
         #expect(outcome.exitStatus == 0)
         #expect(outcome.stdout == "Work Pre")
     }
 
-    @Test
+    /// A fresh temporary path for a script to write to.
+    private func scratchPath(_ name: String) -> String {
+        FileManager.default.temporaryDirectory.appendingPathComponent("thaw-hook-\(name)-\(UUID().uuidString)").path
+    }
+
+    /// The hook's timeout is the OS stopping a real child, so it keeps real time. The script sleeps far past
+    /// the test's time limit, so a child that were waited for instead of stopped fails the test.
+    @Test(.timeLimit(.minutes(5)))
     func `a script that outlives its timeout is reported as timed out, not as failed to run`() async throws {
-        let url = try script("sleep 30")
-        defer { try? FileManager.default.removeItem(at: url) }
-        let started = ContinuousClock.now
+        let pidFile = scratchPath("pid")
+        let url = try script("echo $$ > '\(pidFile)'\nexec sleep 900")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: pidFile)
+        }
 
         do {
             _ = try await HookRunner.run(HookScript(path: url.path, timeoutSeconds: 1), context: Self.context)
@@ -55,7 +69,11 @@ struct HookRunnerTests {
         } catch let HookRunner.HookError.timedOut(after: seconds) {
             #expect(seconds == 1)
         }
-        #expect(ContinuousClock.now - started < .seconds(10), "The child must be stopped, not waited for")
+        // Under load the child can be stopped before its shell writes the pid; the timeout is what this checks.
+        guard let written = try? String(contentsOfFile: pidFile, encoding: .utf8) else { return }
+        let pid = try #require(pid_t(written.trimmingCharacters(in: .whitespacesAndNewlines)))
+        let isGone = kill(pid, 0) == -1 && errno == ESRCH
+        #expect(isGone, "The child must be stopped, not waited for")
     }
 
     @Test
@@ -64,7 +82,7 @@ struct HookRunnerTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         do {
-            _ = try await HookRunner.run(HookScript(path: url.path), context: Self.context)
+            _ = try await HookRunner.run(HookScript(path: url.path, timeoutSeconds: Self.roomyTimeout), context: Self.context)
             Issue.record("The script should have failed")
         } catch let HookRunner.HookError.nonZeroExit(status) {
             #expect(status == 3)
@@ -86,17 +104,28 @@ struct HookRunnerTests {
         }
     }
 
-    @Test
+    @Test(.timeLimit(.minutes(1)))
     func `cancelling the caller is reported as cancellation`() async throws {
-        let url = try script("sleep 30")
-        defer { try? FileManager.default.removeItem(at: url) }
+        let fifo = scratchPath("started")
+        try #require(mkfifo(fifo, 0o600) == 0)
+        let url = try script("echo started > '\(fifo)'\nexec sleep 30")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: fifo)
+        }
         let path = url.path
         let context = Self.context
 
         let task = Task {
             try await HookRunner.run(HookScript(path: path, timeoutSeconds: 20), context: context)
         }
-        try await Task.sleep(for: .milliseconds(300))
+        // Opening the pipe blocks until the script writes to it, so the caller is cancelled while the hook runs.
+        await withCheckedContinuation { (running: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                _ = FileHandle(forReadingAtPath: fifo)?.readDataToEndOfFile()
+                running.resume()
+            }
+        }
         task.cancel()
 
         await #expect(throws: CancellationError.self) {

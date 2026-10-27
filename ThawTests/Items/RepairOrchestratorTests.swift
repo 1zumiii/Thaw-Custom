@@ -74,10 +74,7 @@ struct RepairOrchestratorTests {
         let repairs = RepairOrchestrator()
         let holder = try #require(await repairs.enter(.postRestrictionRepair))
 
-        let waiting = Task { @MainActor in await repairs.enter(.overflowRebalance) }
-        for _ in 0 ..< 20 {
-            await Task.yield()
-        }
+        let waiting = await startedTask { await repairs.enter(.overflowRebalance) }
         waiting.cancel()
 
         #expect(await waiting.value == nil)
@@ -104,12 +101,11 @@ struct RepairOrchestratorTests {
         let move = try #require(repairs.beginMove())
         var passRan = false
 
-        let pass = Task { @MainActor in
+        let pass = await startedTask {
             guard let hold = await repairs.enter(.structuralNormalization) else { return }
             passRan = true
             repairs.leave(hold)
         }
-        try await Task.sleep(for: .milliseconds(50))
         #expect(!passRan)
         #expect(repairs.ledger.isRunning(.itemMove))
 
@@ -189,10 +185,7 @@ struct RepairOrchestratorTests {
         let repairs = RepairOrchestrator()
         let holder = try #require(await repairs.enter(.arrivalOrderRestore))
         repairs.request(.overflowRebalance, cause: .cachePublished)
-        let waiting = Task { @MainActor in await repairs.enter(.overflowRebalance) }
-        for _ in 0 ..< 20 {
-            await Task.yield()
-        }
+        let waiting = await startedTask { await repairs.enter(.overflowRebalance) }
 
         _ = repairs.writeNow(.preRevealOrder, cause: .revealStarting) { $0.door }
 
@@ -262,13 +255,63 @@ struct RepairOrchestratorTests {
         #expect(await writingPass(repairs))
     }
 
-    @Test("Only the causes that start something the user does call off automatic work")
-    func interruptingCauses() {
-        let interrupting = Set([RepairOrchestrator.Cause.revealStarting, .userDragStarted, .userClickedItem])
-        for cause in [RepairOrchestrator.Cause.revealStarting, .userDragStarted, .userClickedItem, .userDragEnded, .sectionRevealed, .restrictionChanged, .settled] {
-            #expect(cause.interruptsAutomaticWork == interrupting.contains(cause))
+    @Test(
+        "A reveal Thaw makes by itself leaves a queued automatic pass its turn; a user's reveal still calls it off",
+        arguments: [(RepairOrchestrator.Cause.policyReveal, true), (.revealStarting, false)]
+    )
+    func preRevealWriteAndAQueuedPass(cause: RepairOrchestrator.Cause, passRuns: Bool) async throws {
+        let repairs = RepairOrchestrator()
+        let holder = try #require(await repairs.enter(.arrivalOrderRestore))
+        repairs.request(.overflowRebalance, cause: .cachePublished)
+        let waiting = await startedTask { await repairs.enter(.overflowRebalance) }
+
+        _ = repairs.writeNow(.preRevealOrder, cause: cause) { $0.door }
+        repairs.leave(holder)
+
+        let hold = await waiting.value
+        #expect((hold != nil) == passRuns)
+        if let hold {
+            repairs.leave(hold)
         }
-        let allAreUserActions = interrupting.allSatisfy(\.isUserAction)
-        #expect(allAreUserActions)
+    }
+
+    @Test(
+        "A policy reveal's restore request leaves a planned pass alone; a user's reveal calls it off",
+        arguments: [(RepairOrchestrator.Cause.policyReveal, true), (.revealStarting, false)]
+    )
+    func revealRequestAndAPlannedPass(cause: RepairOrchestrator.Cause, passRuns: Bool) async {
+        let repairs = RepairOrchestrator()
+        repairs.request(.postRestrictionRepair, cause: .restrictionChanged)
+
+        repairs.request(.revealReconcile, cause: cause)
+
+        let hold = await repairs.enter(.postRestrictionRepair)
+        #expect((hold != nil) == passRuns)
+        if let hold {
+            repairs.leave(hold)
+        }
+    }
+
+    @Test("A policy reveal leaves the loop pause in place")
+    func policyRevealKeepsThePause() async {
+        let repairs = RepairOrchestrator()
+        for _ in 0 ... AutomaticWriteBudget.limit {
+            _ = await writingPass(repairs)
+        }
+
+        _ = repairs.writeNow(.preRevealOrder, cause: .policyReveal) { $0.door }
+        repairs.request(.revealReconcile, cause: .policyReveal)
+
+        #expect(await repairs.enter(.structuralNormalization) == nil)
+    }
+
+    @Test("The restore a policy reveal asked for keeps its turn when the user clicks")
+    func policyRevealRestoreSurvivesAClick() {
+        let repairs = RepairOrchestrator()
+        repairs.request(.revealReconcile, cause: .policyReveal)
+
+        repairs.interruptAutomaticWork(by: .userClickedItem)
+
+        #expect(repairs.ledger.causesWaiting(for: .revealReconcile) == [.policyReveal])
     }
 }

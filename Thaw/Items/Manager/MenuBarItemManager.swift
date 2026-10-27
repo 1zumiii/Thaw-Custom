@@ -83,11 +83,11 @@ final class MenuBarItemManager {
         itemCache.managedItems
     }
 
-    /// The dividers as of the last cache walk.
+    /// The dividers as the last cache walk found them, or nil when it found none.
     ///
     /// MenuBarItemCache does not retain them, its initializer removes them
-    /// from the item list, so callers that need a divider outside a walk
-    /// would otherwise have to enumerate the bar again to find one.
+    /// from the item list. It never holds stand-ins, so passes that need a
+    /// divider outside a walk read cacheDividers(on:) instead.
     var lastKnownControlItems: ControlItemPair?
 
     @ObservationIgnored var lastVisibleControlDiagnosticState: String?
@@ -362,6 +362,9 @@ final class MenuBarItemManager {
     /// scheduleObservedMembershipAdoption(reason:).
     var manualMembershipTask: Task<Void, Never>?
 
+    /// What the stored weights read as when the user's ⌘-drag started.
+    let dragMembership = DragMembershipBaseline<ObservedMembership.DragBaseline>()
+
     /// When the user's last ⌘-drag in the menu bar ended. See
     /// isUserArrangingMenuBar.
     var lastUserMenuBarDragEnd: ContinuousClock.Instant?
@@ -427,8 +430,8 @@ final class MenuBarItemManager {
     var isResettingLayout = false
     /// Suppresses saving section order during an active order-restore pass.
     var isRestoringItemOrder = false
-    /// Timestamp when isRestoringItemOrder was set (for timeout detection).
-    var isRestoringItemOrderTimestamp: Date?
+    /// When isRestoringItemOrder was set (for timeout detection).
+    var isRestoringItemOrderTimestamp: ContinuousClock.Instant?
     /// True during the startup settling period, during which restore operations
     /// and section-order saves are suppressed. This prevents cascading icon moves
     /// when many apps launch at login (login item boot) or restart in quick succession
@@ -498,7 +501,7 @@ final class MenuBarItemManager {
     var isApplyingProfileLayout = false
 
     /// Debounce for macOS 27 overflow rebalance (assignment backends skip legacy Phase 4).
-    var lastOverflowRebalance: Date?
+    var lastOverflowRebalance: ContinuousClock.Instant?
 
     /// Width the macOS 27 overflow budget gives up for a notch-covered control
     /// item and for parked Visible items. See OverflowDeficits.
@@ -688,7 +691,7 @@ final class MenuBarItemManager {
     static let boundaryRepairTripLimit = 2
 
     /// Suppressions older than this are cleared on the next repair pass.
-    static let boundaryRepairSuppressionCooldown: TimeInterval = 60
+    static let boundaryRepairSuppressionCooldown: Duration = .seconds(60)
 
     /// The display the last repair pass ran against, so a topology change can
     /// re-arm items that were only stranded by the old arrangement.
@@ -1370,6 +1373,11 @@ final class MenuBarItemManager {
         loadSavedSectionOrder()
         loadNewItemsPlacementPreference()
         loadPreferredPositionsVerdict()
+        dragMembership.read = { [weak self] in self?.dragStartReading() }
+        dragMembership.cancelPendingRead = { [weak self] in
+            self?.manualMembershipTask?.cancel()
+            self?.manualMembershipTask = nil
+        }
         MenuBarItemManager.diagLog.debug("performSetup: loaded \(knownItemIdentifiers.count) known identifiers, \(pinnedHiddenBundleIDs.count) pinned hidden, \(pinnedAlwaysHiddenBundleIDs.count) pinned always-hidden, \(savedSectionOrder.values.map(\.count)) saved order entries")
         // On first launch (no known identifiers), avoid auto-relocating the leftmost item
         // so everything remains in the hidden section until the user interacts.

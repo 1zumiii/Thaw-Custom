@@ -6,6 +6,7 @@
 //  Licensed under the GNU GPLv3
 
 import AppKit
+import Combine
 import MenuBarModel
 import Observation
 
@@ -20,6 +21,8 @@ final class AlwaysShowHiddenItemsController {
     private let resetPresentation: () -> Void
     private var isAlwaysShowRevealActive = false
     private var observationTask: Task<Void, Never>?
+    private var displayChangeHold = AlwaysShowDisplayChangeHold()
+    private var displayChangeSubscriptions = Set<AnyCancellable>()
 
     init(
         activeDisplayID: @escaping () -> CGDirectDisplayID? = {
@@ -50,9 +53,11 @@ final class AlwaysShowHiddenItemsController {
         return alwaysShow(displayID) && !usesThawBar(displayID)
     }
 
-    /// Zen suspends the policy without transferring its reveal to the user.
+    /// Zen suspends the policy without transferring its reveal to the user. A reveal
+    /// the policy owned goes back to the policy, which reveals inline again or resets;
+    /// replayed as the user's, it could open the Thaw Bar with the Thaw Bar off.
     var shouldRestorePreZenReveals: Bool {
-        !isAlwaysShowRevealActive || isEnabled
+        !isAlwaysShowRevealActive
     }
 
     func observeDisplaySettings(
@@ -70,7 +75,35 @@ final class AlwaysShowHiddenItemsController {
         }
     }
 
+    /// Holds back from each screen-parameter posting until ``finishDisplayChange()``, or until a settle
+    /// that changed nothing, so a reveal never lands on unsettled geometry.
+    func holdDuringDisplayChanges(
+        invalidations: some Publisher<Void, Never>,
+        settlements: some Publisher<EnvironmentChange, Never>
+    ) {
+        displayChangeSubscriptions = [
+            invalidations.sink { [weak self] in
+                self?.displayChangeHold.invalidate()
+            },
+            settlements.sink { [weak self] change in
+                guard let self, displayChangeHold.settle(change) else { return }
+                apply(closingSections: false)
+            },
+        ]
+    }
+
+    /// The display change's presentation step, on the settled bar.
+    func finishDisplayChange() {
+        guard displayChangeHold.finishRun() else { return }
+        apply(closingSections: false)
+    }
+
     func synchronize(closingSections: Bool = false) {
+        guard displayChangeHold.requestSync() else { return }
+        apply(closingSections: closingSections)
+    }
+
+    private func apply(closingSections: Bool) {
         guard !isZenModeActive() else { return }
         let enabled = isEnabled
         guard enabled || isAlwaysShowRevealActive else { return }

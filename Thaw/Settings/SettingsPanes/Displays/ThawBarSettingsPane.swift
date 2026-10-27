@@ -29,7 +29,7 @@ struct ThawBarSettingsPane: View {
     /// page opens on something real the user can act on.
     @State private var editingContext: EditingContext = .template
 
-    @State private var isOptionsExpanded = false
+    @State private var tab = ThawBarTab.display
 
     @State private var hasChosenContext = false
 
@@ -48,16 +48,23 @@ struct ThawBarSettingsPane: View {
                 )
             }
 
-            contextPicker
+            SettingsPaneTabs(
+                selection: $tab,
+                tabs: ThawBarTab.allCases,
+                tabForSection: ThawBarTab.init(section:)
+            )
 
-            configurationControls(for: editingContext)
-
-            // The look sits beside the preview it changes; it applies on
-            // every display.
-            ThawBarAppearanceEditor(configuration: Bindable(appState.appearanceManager).configuration)
-
-            DisclosureGroup("Options for all displays", isExpanded: $isOptionsExpanded) {
-                appWideOptions
+            switch tab {
+            case .display:
+                contextPicker
+                configurationControls(for: editingContext)
+            case .look:
+                // The look sits under the preview it changes; it applies on every display.
+                ThawBarAppearanceEditor(configuration: Bindable(appState.appearanceManager).configuration)
+            case .allDisplays:
+                ThawSection("Options for all displays") {
+                    appWideOptions
+                }
             }
         }
         .onAppear {
@@ -71,12 +78,6 @@ struct ThawBarSettingsPane: View {
                 editingContext = .display(first.id)
             }
             hasChosenContext = true
-            if SettingsSearchNavigation.consumeDisclosure(
-                .thawBarAppWideOptions,
-                navigationState: appState.navigationState
-            ) {
-                isOptionsExpanded = true
-            }
         }
     }
 
@@ -348,5 +349,33 @@ struct ThawBarSettingsPane: View {
             )
         )
         .annotation("Clicking a hidden item shows it in the menu bar and opens its menu under the icon. Turn off to open the menu without showing the icon.")
+    }
+}
+
+nonisolated enum ThawBarTab: CaseIterable, ThawTab {
+    case display
+    case look
+    case allDisplays
+
+    /// The tab holding a search result's section.
+    init?(section: String) {
+        guard section == "Options for all displays" else { return nil }
+        self = .allDisplays
+    }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .display: "Display"
+        case .look: "Look"
+        case .allDisplays: "All Displays"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .display: "display"
+        case .look: "paintbrush"
+        case .allDisplays: "rectangle.on.rectangle"
+        }
     }
 }

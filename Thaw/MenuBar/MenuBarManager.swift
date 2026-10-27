@@ -12,6 +12,7 @@ import Observation
 import PlatformRuntimeKit
 import SwiftUI
 import ThawCapture
+import ThawUI
 
 /// Owns sections, panels, per-item hotkeys, and color samples, reacting to system and setting changes after setup.
 /// AppState owns this manager; methods stop when the weak back reference is gone.
@@ -33,7 +34,7 @@ final class MenuBarManager {
     /// Persisted _HIHideMenuBar value, unlike isMenuBarHiddenBySystem which also reflects transient app presentation options.
     private(set) var isMenuBarHiddenBySystemUserDefaults = false
 
-    /// Pause hover after an explicit toggle so it cannot undo the user; resume when the pointer leaves.
+    /// Pause hover after an explicit toggle so it cannot undo the user; it resumes once the pointer leaves the hover band.
     var showOnHoverAllowed = true {
         didSet {
             // Hiding a section and the hover rearm both allow hover again, which undid Zen Mode's lock.
@@ -65,13 +66,6 @@ final class MenuBarManager {
     /// Replaced wholesale when observers are rebuilt.
     @ObservationIgnored
     private var cancellables = Set<AnyCancellable>()
-
-    /// Block nudges only during reveal reflow, not a settled reveal, so hidden moves retain their cursor-free path.
-    @ObservationIgnored
-    private var lastRevealTransition: Date?
-
-    /// Generous reflow window; observed settling takes tens of milliseconds.
-    private static let revealReflowSettleWindow: TimeInterval = 0.5
 
     /// Cancel delayed focus rehide on a newer focus change or user reveal so it cannot override new state.
     @ObservationIgnored
@@ -141,7 +135,7 @@ final class MenuBarManager {
     private var wakePollPrevColors: [CGDirectDisplayID: MenuBarAverageColorInfo]?
     private var wakePollStableCount = 0
     private var wakePollDidChange = false
-    private var wakePollStartTime: Date?
+    private var wakePollStartTime: ContinuousClock.Instant?
 
     /// Thaw has replaced the front app's menus with its own empty menus.
     private(set) var isHidingApplicationMenus = false
@@ -185,6 +179,10 @@ final class MenuBarManager {
     /// Per-extra opt-in stand-ins for Apple extras removed in hidden sections; see SystemExtraTakeoverCoordinator.
     let systemExtraTakeover = SystemExtraTakeoverCoordinator()
     let newIconFollower = NewIconSectionFollower()
+    /// Who opened the current reveal, so Thaw's own reveals are not counted as the user's.
+    let revealAttribution = RevealAttribution()
+    /// Block nudges only during reveal reflow, not a settled reveal, so hidden moves retain their cursor-free path.
+    let revealReflow = RevealReflowWindow()
 
     /// Panels observe reveals without holding a platform type; emits nothing without an engine.
     var revealedSectionChanges: AnyPublisher<MenuBarSectionName?, Never> {
@@ -217,8 +215,8 @@ final class MenuBarManager {
             .map(MenuBarGroupMoveRefusal.init)
     }
 
-    /// Covers hidden items that flash during Clock or Notification Center shortcut bridging.
-    let clockBridgeCover = ClockBridgeCover()
+    /// Covers hidden items that flash while an icon capture reveals them.
+    let revealCover = RevealCover()
 
     /// What the bar is drawn over, for anything that paints over the bar.
     let backdrop = MenuBarBackdrop()
@@ -226,9 +224,9 @@ final class MenuBarManager {
     /// The live left edge of the visible run, for anything drawn against it.
     let leadingEdgeWatcher = MenuBarLeadingEdgeWatcher()
 
-    private var alwaysShowHiddenItemsController: AlwaysShowHiddenItemsController?
+    var alwaysShowHiddenItemsController: AlwaysShowHiddenItemsController?
     /// Re-applies "Always show hidden items" when the active menu bar moves to another display.
-    private let activeDisplayWatcher = ActiveMenuBarDisplayWatcher()
+    private var activeDisplayWatcher: ActiveMenuBarDisplayWatcher?
 
     var shouldDeferBarMutation: Bool {
         guard let nativeMenuBarStateChangedAt else { return false }
@@ -281,17 +279,18 @@ final class MenuBarManager {
     /// Captured at launch setup so smart rehide reads menu-open state without reaching through the item manager.
     private var menuOpenMonitor: MenuOpenMonitor?
 
-    func performSetup(with appState: AppState) {
+    func performSetup(with appState: AppState, activeDisplayWatcher: ActiveMenuBarDisplayWatcher, displays: DisplayEnvironment) {
         self.appState = appState
+        self.activeDisplayWatcher = activeDisplayWatcher
         configuration = appState.settings
         menuOpenMonitor = appState.itemManager.menuOpenMonitor
         installObservers()
-        thawBarPanel.performSetup(with: appState)
-        searchPanel.performSetup(with: appState)
+        thawBarPanel.performSetup(with: appState, displayInvalidations: displays.invalidations, displaySettlements: displays.settlements)
+        searchPanel.performSetup(with: appState, displayInvalidations: displays.invalidations)
         appearanceEditorPanel.performSetup(with: appState)
-        layoutEditorPanel.performSetup(with: appState)
+        layoutEditorPanel.performSetup(with: appState, displayInvalidations: displays.invalidations)
         for section in sections {
-            section.performSetup(with: appState)
+            section.performSetup(with: appState, displays: displays)
         }
         // Divider reflow cannot hide items; a separate assignment model drives the restriction set.
         nativeAppHidingExperiment.recoverPreviousSession()
@@ -299,11 +298,13 @@ final class MenuBarManager {
         // Recovery and overflow need notch coverage kept current across display changes.
         MenuBarNotchGeometry.refresh()
         let controller = RuntimeSectionController(
-            context: RuntimeSectionContextAdapter(appState: appState)
+            context: RuntimeSectionContextAdapter(appState: appState, revealAttribution: revealAttribution)
         )
         controller.start()
         sectionController = controller
         runtimeSectionController = controller
+        revealAttribution.observe(revealedSectionChanges)
+        revealReflow.observe(revealedSectionChanges)
         nativeAppHidingExperiment.start(controller: controller, settings: appState.settings.advanced)
         systemExtraTakeover.start(controller: controller, settings: appState.settings.advanced) { [weak appState] identifier in
             guard let itemManager = appState?.itemManager,
@@ -317,7 +318,7 @@ final class MenuBarManager {
         MenuBarPresentationProvider.startDiagnosticSessionIfGated()
         leadingEdgeWatcher.performSetup(with: appState)
         backdrop.performSetup(with: appState)
-        clockBridgeCover.performSetup(with: appState)
+        revealCover.performSetup(with: appState)
         synchronizeAlwaysShowHiddenItems()
         rebuildItemHotkeys()
     }
@@ -340,7 +341,6 @@ final class MenuBarManager {
         observeDisplaySleepCycle(into: &bag)
         observeAdaptiveAppearance(into: &bag)
         observeApplicationMenuHiding(into: &bag)
-        observeRevealTransitions(into: &bag)
         cancellables = bag
     }
 
@@ -458,13 +458,7 @@ final class MenuBarManager {
             usesThawBar: { [weak self] in self?.shouldUseThawBar(for: $0) ?? true },
             isZenModeActive: { [weak self] in self?.isZenModeActive == true },
             revealedSection: { [weak self] in self?.sectionController.revealedSection },
-            reveal: { [weak self] target in
-                if let target {
-                    self?.sectionController.show(target)
-                } else {
-                    self?.sectionController.hideRevealedSections()
-                }
-            },
+            reveal: { [weak self] in self?.presentAlwaysShowTarget($0) },
             resetPresentation: { [weak self] in
                 guard let self else { return }
                 showOnHoverAllowed = true
@@ -480,14 +474,14 @@ final class MenuBarManager {
         } refreshControls: { [weak self] in
             self?.updateControlItemStates()
         }
-        activeDisplayWatcher.isNeeded = { [settings = appState.settings.displaySettings] in
+        activeDisplayWatcher?.isNeeded = { [settings = appState.settings.displaySettings] in
             settings.wideDisplayRule.isEnabled || settings.isAlwaysShowEnabledOnAnyDisplay
         }
-        activeDisplayWatcher.onChange = { [weak self] in
+        activeDisplayWatcher?.onChange = { [weak self] in
             self?.synchronizeAlwaysShowHiddenItems()
             self?.updateControlItemStates()
         }
-        activeDisplayWatcher.start()
+        activeDisplayWatcher?.start()
 
         // Debounce cache changes so new items become assignable without churning hotkey registrations each tick.
         let hotkeyTask = Task { @MainActor [weak self, itemManager = appState.itemManager] in
@@ -612,7 +606,7 @@ final class MenuBarManager {
         wakePollPrevColors = nil
         wakePollStableCount = 0
         wakePollDidChange = false
-        wakePollStartTime = Date()
+        wakePollStartTime = .now
         wakePollTimer = Timer.publish(every: 1, tolerance: 0.1, on: .main, in: .default)
             .autoconnect()
             .sink { [weak self] _ in
@@ -625,8 +619,8 @@ final class MenuBarManager {
     /// Await capture so comparisons use this tick's colors rather than exhausting the poll budget on stale values.
     /// Dropping wakePollTimer ends polling and releases the subscription.
     private func advanceWakeStabilizationPoll() async {
-        let elapsed = wakePollStartTime.map { Date().timeIntervalSince($0) } ?? 0
-        if elapsed >= 10 {
+        let elapsed = wakePollStartTime.map { $0.duration(to: .now) } ?? .zero
+        if elapsed >= .seconds(10) {
             endWakeStabilizationPoll()
             return
         }
@@ -1285,7 +1279,7 @@ final class MenuBarManager {
             sectionsRevealedBeforeZenMode = []
         }
         for name in sectionsRevealedBeforeZenMode {
-            section(withName: name)?.show()
+            revealAttribution.policy { section(withName: name)?.show() }
         }
         sectionsRevealedBeforeZenMode = []
         synchronizeAlwaysShowHiddenItems()
@@ -1499,26 +1493,8 @@ final class MenuBarManager {
         lastUserRevealDate = Date()
     }
 
-    /// Distinguish in-flight reveal reflow from a section simply left open.
-    private func observeRevealTransitions(into bag: inout Set<AnyCancellable>) {
-        revealedSectionChanges
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.lastRevealTransition = .now
-            }
-            .store(in: &bag)
-    }
-
-    /// Whether a reveal or hide is still reflowing the bar.
-    var isRevealReflowSettling: Bool {
-        guard let lastRevealTransition else {
-            return false
-        }
-        return Date.now.timeIntervalSince(lastRevealTransition) < Self.revealReflowSettleWindow
-    }
-
     /// The kit suppresses nudges during assertion recompositing, which already lays out the bar; extra resizing flickers.
-    /// It clears this before position-restoring writes; isRevealReflowSettling guards new transitions during suspended restores.
+    /// It clears this before position-restoring writes; revealReflow guards new transitions during suspended restores.
     @ObservationIgnored
     private var revealHideTransitionActive = false
 
@@ -1535,7 +1511,7 @@ final class MenuBarManager {
 
     /// Suppress width nudges and structural normalization during the transition or fixed settling window.
     var shouldSuppressMenuBarAgentNudge: Bool {
-        isRevealReflowSettling || revealHideTransitionActive
+        revealReflow.isSettling || revealHideTransitionActive
     }
 
     /// Cursor-free invalidation after position writes; suppress during reflow to avoid missed rehide clicks, but allow settled reveals.

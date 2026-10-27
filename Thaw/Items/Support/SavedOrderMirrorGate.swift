@@ -6,6 +6,7 @@
 //  Licensed under the GNU GPLv3
 
 import AppKit
+import Combine
 import MenuBarModel
 
 /// Holds back copying the live order into the saved order until the bar has been quiet for a while.
@@ -17,24 +18,43 @@ final class SavedOrderMirrorGate {
 
     private static let diagLog = DiagLog(category: "SavedOrderMirrorGate")
 
+    /// When the live order last became the saved order, or was found to match it.
+    private(set) var lastMirror: ContinuousClock.Instant?
+
     private var lastDisturbance: ContinuousClock.Instant?
     private var lastIdentifiers: Set<String>?
-    private var systemEventTasks = [Task<Void, Never>]()
+    private var wakeTask: Task<Void, Never>?
+    private var displayInvalidation: AnyCancellable?
 
+    /// Observes screen wakes; display changes arrive through observe(displayInvalidations:).
     init(observesSystem: Bool = true) {
         guard observesSystem else { return }
-        systemEventTasks = [
-            NSWorkspace.shared.notificationCenter.eventsTask(named: NSWorkspace.screensDidWakeNotification) { [weak self] in
-                self?.noteDisturbance()
-            },
-            NotificationCenter.default.eventsTask(named: NSApplication.didChangeScreenParametersNotification) { [weak self] in
-                self?.noteDisturbance()
-            },
-        ]
+        wakeTask = NSWorkspace.shared.notificationCenter.eventsTask(named: NSWorkspace.screensDidWakeNotification) { [weak self] in
+            self?.noteDisturbance()
+        }
+    }
+
+    /// Counts each display invalidation as a disturbance, in the posting turn. A later call replaces the earlier source.
+    func observe(displayInvalidations: some Publisher<Void, Never>) {
+        displayInvalidation = displayInvalidations.sink { [weak self] in self?.noteDisturbance() }
     }
 
     func noteDisturbance(at instant: ContinuousClock.Instant = .now) {
         lastDisturbance = instant
+    }
+
+    /// Call once the saved order matches the bar, including when a mirror found nothing to change.
+    /// An order kept over an arrival differs from the bar and does not count.
+    func noteMirrored(at instant: ContinuousClock.Instant = .now) {
+        lastMirror = instant
+    }
+
+    /// Whether a drag on the bar ended after the saved order last caught up with it.
+    /// Until the next mirror the saved order predates the drag and must not be laid back over the bar.
+    func mirrorIsBehind(userDragEndedAt dragEnd: ContinuousClock.Instant?) -> Bool {
+        guard let dragEnd else { return false }
+        guard let lastMirror else { return true }
+        return dragEnd > lastMirror
     }
 
     /// Whether the quiet period has passed since the last disturbance.

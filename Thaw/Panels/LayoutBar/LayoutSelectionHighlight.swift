@@ -46,11 +46,10 @@ enum LayoutSelectionHighlight {
     }
 
     /// The tile's value for VoiceOver: its section, and whether it is selected.
-    static nonisolated func accessibilityValue(section: MenuBarSection.Name, isSelected: Bool) -> String {
-        let sectionName = String(localized: section.localized)
-        guard isSelected else { return sectionName }
+    nonisolated static func accessibilityValue(section: MenuBarSection.Name, isSelected: Bool) -> String {
+        guard isSelected else { return section.localizedName }
         return String(
-            localized: "\(sectionName), selected",
+            localized: "\(section.localizedName), selected",
             comment: "VoiceOver value of a selected Layout item: its section name, then that it is selected"
         )
     }

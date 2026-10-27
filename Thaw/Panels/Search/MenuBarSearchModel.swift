@@ -93,9 +93,9 @@ final class MenuBarSearchModel {
     /// Attaches the model to panel, replacing any earlier attachment.
     ///
     /// While attached, the average menu bar color tracks whichever screen the
-    /// panel is showing on, and is dropped again once the panel hides or the
-    /// display arrangement changes underneath it.
-    func attach(to panel: MenuBarSearchPanel) {
+    /// panel is showing on, and is dropped when the panel hides or
+    /// displayInvalidations fires.
+    func attach(to panel: MenuBarSearchPanel, displayInvalidations: some Publisher<Void, Never>) {
         cancellables.removeAll()
 
         panel.publisher(for: \.isVisible)
@@ -116,9 +116,8 @@ final class MenuBarSearchModel {
 
         // Clear on display changes to prevent stale color info and invalidate
         // any in-flight capture targeting the previous screen geometry.
-        NotificationCenter.default
-            .publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .sink { [weak self] _ in
+        displayInvalidations
+            .sink { [weak self] in
                 self?.clearAverageColorInfo()
             }
             .store(in: &cancellables)

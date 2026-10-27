@@ -204,7 +204,7 @@ extension MenuBarItemManager {
         // An expired suppression re-arms: the strand may have been fighting a
         // transient writer that has since settled.
         let rearmed = boundaryRepairBreaker.rearmExpired(
-            now: Date(), cooldown: MenuBarItemManager.boundaryRepairSuppressionCooldown
+            now: .now, cooldown: MenuBarItemManager.boundaryRepairSuppressionCooldown
         )
         if rearmed > 0 {
             MenuBarItemManager.diagLog.info(
@@ -222,7 +222,7 @@ extension MenuBarItemManager {
                 !failureLedger.cannotCompleteMarked($0) &&
                 controller.section(for: $0) == .visible
         }
-        var liveParkedIDs = ParkedItems.parkedSetAndBarMidY(in: liveItems).parkedIDs
+        var liveParkedIDs = ParkedItems.parkedSetAndBarMidY(in: liveItems, screens: BarAxis.liveDisplayBounds()).parkedIDs
         let prePulseParked = pulseCandidates.filter { liveParkedIDs.contains($0.windowID) }
         let prePulseOnBand = pulseCandidates.filter { !liveParkedIDs.contains($0.windowID) }
         // The picture came with the reading when there is one, so the lane does not wait on a capture.
@@ -248,7 +248,7 @@ extension MenuBarItemManager {
             }
             liveItems = await MenuBarItem.getMenuBarItems(option: .activeSpace)
             guard !arrangementIsManual, !Task.isCancelled else { return false }
-            liveParkedIDs = ParkedItems.parkedSetAndBarMidY(in: liveItems).parkedIDs
+            liveParkedIDs = ParkedItems.parkedSetAndBarMidY(in: liveItems, screens: BarAxis.liveDisplayBounds()).parkedIDs
         } else if !needsPulse {
             MenuBarItemManager.diagLog.debug(
                 "post-restriction repair: pulse skipped, no non-hiding-unsupported items parked or blank"
@@ -400,7 +400,7 @@ extension MenuBarItemManager {
 
         let afterItems = await MenuBarItem.getMenuBarItems(option: .activeSpace)
         guard !Task.isCancelled else { return false }
-        let (_, afterParkedIDs) = ParkedItems.parkedSetAndBarMidY(in: afterItems)
+        let (_, afterParkedIDs) = ParkedItems.parkedSetAndBarMidY(in: afterItems, screens: BarAxis.liveDisplayBounds())
         // Hiding-unsupported items are excluded: their transient blanks would
         // drive repeated pulses.
         let onBandVisibleItems = afterItems.filter {
@@ -440,17 +440,13 @@ extension MenuBarItemManager {
         liveItems: [MenuBarItem],
         controller: any MenuBarSectionControlling
     ) -> MenuBarItem? {
-        if let control = liveItems.first(where: {
-            $0.tag.matchesVisibleControlItem && !$0.isParkedOffMenuBarBand(among: liveItems)
-        }) {
+        let screens = BarAxis.liveDisplayBounds()
+        let onBand = liveItems.filter { !$0.isParkedOffMenuBarBand(among: liveItems, screens: screens) }
+        if let control = onBand.first(where: { $0.tag.matchesVisibleControlItem }) {
             return control
         }
-        return liveItems
-            .filter {
-                !$0.isControlItem &&
-                    controller.section(for: $0) == .visible &&
-                    !$0.isParkedOffMenuBarBand(among: liveItems)
-            }
+        return onBand
+            .filter { !$0.isControlItem && controller.section(for: $0) == .visible }
             .max(by: { $0.bounds.midX < $1.bounds.midX })
     }
 
@@ -462,13 +458,14 @@ extension MenuBarItemManager {
     ) -> [MoveDestination] {
         let experimentalSystemItemHiding = appState?.settings.advanced
             .enableExperimentalSystemItemHiding ?? false
+        let screens = BarAxis.liveDisplayBounds()
         let ordered = MenuBarItem.sortByLeadingEdge(
             liveItems.filter {
                 !$0.isSystemClone &&
                     !$0.isNativeOverflowControl &&
                     !$0.isControlItem &&
                     $0.bounds.width > 0 &&
-                    !$0.isParkedOffMenuBarBand(among: liveItems)
+                    !$0.isParkedOffMenuBarBand(among: liveItems, screens: screens)
             }
         )
         guard let anchorIndex = ordered.firstIndex(where: {

@@ -190,14 +190,6 @@ extension MenuBarItemImageCache {
         displayBounds.contains { CGRect(x: $0.minX, y: $0.minY, width: $0.width, height: barHeight).intersects(bounds) }
     }
 
-    /// Every active display's bounds, top-left global; callable off the main actor.
-    static nonisolated func activeDisplayBounds() -> [CGRect] {
-        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(16, &ids, &count) == .success else { return [] }
-        return ids.prefix(Int(count)).map(CGDisplayBounds)
-    }
-
     /// The share of an overflow control's width a crop must overlap before
     /// the chevron glyphs can appear inside it.
     ///
@@ -210,11 +202,8 @@ extension MenuBarItemImageCache {
     ///
     /// A frame another on-band item occupies (hasPhantomFrame) or one parked
     /// off the band crops someone else's pixels; skip it rather than fail.
-    static nonisolated func hasUnusableCaptureGeometry(
-        _ item: MenuBarItem,
-        among peers: [MenuBarItem]
-    ) -> Bool {
-        item.hasPhantomFrame(among: peers) || item.isParkedOffMenuBarBand(among: peers)
+    static nonisolated func hasUnusableCaptureGeometry(_ item: MenuBarItem, among peers: [MenuBarItem], screens: [CGRect]) -> Bool {
+        item.hasPhantomFrame(among: peers) || item.isParkedOffMenuBarBand(among: peers, screens: screens)
     }
 
     /// Rejects hosting-window screenshots whose pixel size does not match
@@ -433,7 +422,7 @@ extension MenuBarItemImageCache {
             }
 
             if !windowFrame.intersects(bounds),
-               Self.liesOnAMenuBar(bounds, barHeight: windowFrame.height, displayBounds: Self.activeDisplayBounds())
+               Self.liesOnAMenuBar(bounds, barHeight: windowFrame.height, displayBounds: BarAxis.liveDisplayBounds())
             {
                 MenuBarItemImageCache.diagLog.debug(
                     "axBoundsCapture: \(item.logString) bounds \(bounds) are on another display's bar; keeping prior image"

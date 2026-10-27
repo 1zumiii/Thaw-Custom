@@ -135,10 +135,8 @@ struct LayoutBarSelectionTests {
         (.alwaysHidden, "Always-Hidden"),
     ])
     func sectionNamesUseCatalogTranslations(section: MenuBarSectionName, key: String) {
-        #expect(section.localized.key == key)
         let expected = Bundle.main.localizedString(forKey: key, value: nil, table: nil)
-        #expect(String(localized: section.localized) == expected)
-        #expect(MenuBarSearchItemActions.title(for: section) == expected)
+        #expect(section.localizedName == expected)
         #expect(LayoutSelectionHighlight.accessibilityValue(section: section, isSelected: false) == expected)
 
         let selectedFormat = Bundle.main.localizedString(forKey: "%@, selected", value: nil, table: nil)
@@ -250,7 +248,7 @@ struct LayoutBarSelectionTests {
         #expect(!views[0].isLayoutSelected)
         views[0].viewWillDraw()
         #expect(views[0].layer?.borderWidth == 0)
-        #expect((views[0].accessibilityValue() as? String) == String(localized: MenuBarSection.Name.visible.localized))
+        #expect((views[0].accessibilityValue() as? String) == MenuBarSection.Name.visible.localizedName)
     }
 
     @Test("A right click on one of several selected items offers moving them all")

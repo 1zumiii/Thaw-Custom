@@ -20,7 +20,7 @@ import MenuBarModel
 final class NotchPanelController {
     private static let diagLog = DiagLog(category: "NotchPanel")
 
-    private let model = NotchPanelModel()
+    private let model: NotchPanelModel
     private lazy var panel = NotchPanel(content: NotchContentView(model: model))
 
     private let mediaWidget = NotchMediaWidget()
@@ -44,7 +44,11 @@ final class NotchPanelController {
         UserDefaults.standard.bool(forKey: Defaults.Key.enableMenuBarItemDescenders.rawValue)
     }
 
-    func performSetup(with appState: AppState) {
+    init(model: NotchPanelModel = NotchPanelModel()) {
+        self.model = model
+    }
+
+    func performSetup(with appState: AppState, displayInvalidations: some Publisher<Void, Never>) {
         self.appState = appState
 
         // The monitors follow the flag. A global mouse-moved monitor wakes
@@ -62,20 +66,21 @@ final class NotchPanelController {
             }
             .store(in: &cancellables)
 
-        // A display change invalidates the anchor the descender was placed
-        // against, and the item it belongs to may not even be on this screen
-        // any more. Retract rather than leave it hanging somewhere stale.
-        NotificationCenter.default.publisher(
-            for: NSApplication.didChangeScreenParametersNotification
-        )
-        .debounce(for: .seconds(0.2), scheduler: DispatchQueue.main)
-        .sink { [weak self] _ in self?.dismiss() }
-        .store(in: &cancellables)
+        observeDisplayInvalidations(displayInvalidations)
 
         if isEnabled {
             installHoverMonitors()
         }
         Self.diagLog.info("notch panel: ready, enabled=\(isEnabled)")
+    }
+
+    /// A display change invalidates the descender's anchor, and its item may have left this screen,
+    /// so retract it once the invalidations go quiet.
+    func observeDisplayInvalidations(_ invalidations: some Publisher<Void, Never>) {
+        invalidations
+            .debounce(for: .seconds(0.2), scheduler: DispatchQueue.main)
+            .sink { [weak self] in self?.dismiss() }
+            .store(in: &cancellables)
     }
 
     // MARK: Hover

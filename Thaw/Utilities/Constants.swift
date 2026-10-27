@@ -7,6 +7,7 @@
 
 import Foundation
 import MenuBarModel
+import ThawUI
 
 /// App-specific constants for the main Thaw target.
 /// System-framework paths shared with XPC targets live in SharedConstants.
@@ -109,6 +110,12 @@ nonisolated enum Constants {
         /// screenshot, so MenuBarAgent finishes compositing the revealed glyph.
         /// Without this the crop captures a partially-rendered icon.
         static let layoutPrewarmRenderSettle: Duration = .milliseconds(200)
+        /// How long revealed items may stay out while they settle for a capture. Each poll reads the whole bar,
+        /// which takes seconds with many apps, so the limit is time, not a poll count.
+        static let revealCaptureSettleBudget: Duration = .seconds(3)
+        /// How long a capture's reveal cover may stay up: the settle budget, one more whole-bar read
+        /// started at its end (up to 7 s with about 135 apps), the render settle and the screenshots.
+        static let revealCaptureCoverLifetime: Duration = revealCaptureSettleBudget + .seconds(8) + layoutPrewarmRenderSettle + .seconds(2)
         /// Window after a native menu-bar visibility change during which Thaw
         /// defers its own mutations, letting the system settle the new layout
         /// before Thaw reorders or reveals items on top of it.
@@ -169,6 +176,9 @@ nonisolated enum Constants {
     /// Info.plist key used to configure the donation URL.
     static let donateURLInfoPlistKey = "ThawDonateURL"
 
+    /// Info.plist key used to configure the Floe URL.
+    static let floeURLInfoPlistKey = "ThawFloeURL"
+
     /// Info.plist key used to configure the community chat URL.
     static let discordURLInfoPlistKey = "ThawDiscordURL"
 
@@ -194,6 +204,9 @@ nonisolated enum Constants {
 
     /// The URL for sponsoring/donating.
     static let donateURL: URL = requiredInfoPlistURL(donateURLInfoPlistKey)
+
+    /// Floe, the team's launcher, which links back to Thaw from its own About.
+    static let floeURL: URL = requiredInfoPlistURL(floeURLInfoPlistKey)
 
     /// The project's community chat.
     static let discordURL: URL = requiredInfoPlistURL(discordURLInfoPlistKey)

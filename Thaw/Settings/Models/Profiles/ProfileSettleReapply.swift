@@ -18,39 +18,62 @@ nonisolated enum ProfileSettleReapply {
         return activeProfileID != lastSettledProfileID
     }
 
+    /// What the end of a settle does with the active profile.
+    enum Step: Equatable {
+        /// Apply it, because the last settle left another profile in place.
+        case reapply
+        /// A display switch applies the profile during the settle, and applying it again would run its hooks
+        /// and snapshot twice. Its layout waits for the settling task, so the settle must not wait for it.
+        case leavePendingApply
+        /// Leave it, so drags made since it was applied survive.
+        case keep
+    }
+
+    static func step(activeProfileID: UUID?, lastSettledProfileID: UUID?, pendingApplyProfileID: UUID?) -> Step {
+        guard let activeProfileID else { return .keep }
+        if pendingApplyProfileID == activeProfileID {
+            return .leavePendingApply
+        }
+        return shouldReapply(activeProfileID: activeProfileID, lastSettledProfileID: lastSettledProfileID)
+            ? .reapply : .keep
+    }
+
     /// The profile the last settle left in place, kept across launches.
     struct Record {
         static let key = Defaults.Key.lastSettledProfileID.rawValue
 
-        private let defaults: UserDefaults
+        private let stored: StoredProfileID
 
         init(defaults: UserDefaults = Defaults.store) {
-            self.defaults = defaults
+            stored = StoredProfileID(key: Self.key, defaults: defaults)
         }
 
         var lastSettledProfileID: UUID? {
-            get { defaults.string(forKey: Self.key).flatMap(UUID.init(uuidString:)) }
-            nonmutating set {
-                if let newValue {
-                    defaults.set(newValue.uuidString, forKey: Self.key)
-                } else {
-                    defaults.removeObject(forKey: Self.key)
-                }
-            }
+            get { stored.id }
+            nonmutating set { stored.id = newValue }
         }
 
-        /// Records the active profile and says whether this settle should apply it.
-        func settle(activeProfileID: UUID?) -> Bool {
+        /// Records the active profile and says what this settle does with it.
+        func settle(activeProfileID: UUID?, pendingApplyProfileID: UUID?) -> Step {
             let last = lastSettledProfileID
-            let reapply = ProfileSettleReapply.shouldReapply(activeProfileID: activeProfileID, lastSettledProfileID: last)
+            let step = ProfileSettleReapply.step(
+                activeProfileID: activeProfileID,
+                lastSettledProfileID: last,
+                pendingApplyProfileID: pendingApplyProfileID
+            )
             lastSettledProfileID = activeProfileID
             if let activeProfileID {
+                let verb = switch step {
+                case .reapply: "applying"
+                case .leavePendingApply: "leaving the running apply of"
+                case .keep: "keeping"
+                }
                 ProfileSettleReapply.diagLog.info(
-                    "settle: \(reapply ? "applying" : "keeping") profile \(activeProfileID.uuidString) " +
+                    "settle: \(verb) profile \(activeProfileID.uuidString) " +
                         "(last settled \(last?.uuidString ?? "none"))"
                 )
             }
-            return reapply
+            return step
         }
     }
 }

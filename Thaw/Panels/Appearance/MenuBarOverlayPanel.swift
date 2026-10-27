@@ -9,6 +9,7 @@ import AsyncAlgorithms
 import Cocoa
 import Combine
 import MenuBarModel
+import ThawUI
 
 private final class MenuBarLiquidGlassFadeView: NSView {
     var isEnabled = false {
@@ -273,7 +274,7 @@ final class MenuBarOverlayPanel: NSPanel {
     }
 
     /// Probe rate based on time at rest; see MissionControlShieldProbe.tickInterval(atRestFor:).
-    static nonisolated func missionControlProbeTickInterval(atRestFor restDuration: TimeInterval?) -> TimeInterval {
+    static nonisolated func missionControlProbeTickInterval(atRestFor restDuration: Duration?) -> TimeInterval {
         MissionControlShieldProbe.tickInterval(atRestFor: restDuration)
     }
 
@@ -570,6 +571,11 @@ private final class MenuBarOverlayPanelContentView: NSView {
     /// the adaptive gradient tint. nil until the first palette capture lands.
     @Published private var wallpaperPalette: WallpaperPalette?
 
+    /// The shade macOS drew the icons in, read only while a glass finish follows it.
+    @Published private var iconShade: MenuBarIconShade?
+    private var iconShadeTask: Task<Void, Never>?
+    private var iconShadeSchedule = IconShadeReadSchedule()
+
     private var cancellables = Set<AnyCancellable>()
 
     /// macOS 27 NSView animator alpha finishes in one frame regardless of duration or layer backing; window alpha still works.
@@ -711,6 +717,10 @@ private final class MenuBarOverlayPanelContentView: NSView {
 
     private func configureCancellables() {
         geometryRefresh.cancel()
+        // A read started for the earlier window would land after the new subscriptions.
+        iconShadeTask?.cancel()
+        iconShadeTask = nil
+        iconShadeSchedule.reset()
         var subscriptions = Set<AnyCancellable>()
 
         if let overlayPanel {
@@ -733,6 +743,7 @@ private final class MenuBarOverlayPanelContentView: NSView {
                         if previewConfiguration != preview {
                             previewConfiguration = preview
                         }
+                        readIconShadeIfFollowed()
                     }
                 }
                 AnyCancellable { task.cancel() }
@@ -743,6 +754,8 @@ private final class MenuBarOverlayPanelContentView: NSView {
                     for await colors in changes {
                         guard let self, let panel = self.overlayPanel else { return }
                         averageColorInfo = colors[panel.owningScreen.displayID]
+                        // The schedule reads again only when this display's own average changed.
+                        readIconShadeIfFollowed()
                     }
                 }
                 AnyCancellable { colorsTask.cancel() }
@@ -832,8 +845,9 @@ private final class MenuBarOverlayPanelContentView: NSView {
 
         $fullConfiguration.replace(with: ())
             .merge(with: $previewConfiguration.replace(with: ()))
-            .merge(with: $averageColorInfo.replace(with: ()))
+            .merge(with: $averageColorInfo.removeDuplicates().replace(with: ()))
             .merge(with: $wallpaperPalette.replace(with: ()))
+            .merge(with: $iconShade.replace(with: ()))
             .sink { [weak self] _ in
                 self?.updateBackgroundGlass()
                 self?.needsDisplay = true
@@ -1253,6 +1267,35 @@ private final class MenuBarOverlayPanelContentView: NSView {
             NSColor(cgColor: tintColor)?.withAlphaComponent(opacity)
         } else {
             nil
+        }
+        let hasFinish = MenuBarPrivateGlass.apply(style.privateVariant, to: glassView) && style.followsIconShade
+        // macOS draws the icons over this glass, so a finish takes their shade: read from
+        // the icons when known, else estimated from the bar's colour.
+        let barLuminance = averageColorInfo.flatMap { ForegroundContrast.relativeLuminance(of: $0.color) }
+        let appearanceName = (iconShade ?? barLuminance.map(MenuBarIconShade.estimated))?.matchingGlassAppearance
+        glassView.appearance = hasFinish ? appearanceName.flatMap(NSAppearance.init(named:)) : nil
+    }
+
+    /// Reads the icons' shade when a finish follows it and it's unknown, or
+    /// again when the bar changed. IconShadeReadSchedule decides when.
+    private func readIconShadeIfFollowed() {
+        let followed = configuration.tintGlassStyle.followsIconShade || configuration.backgroundGlassStyle.followsIconShade
+        guard followed, let panel = overlayPanel,
+              iconShadeSchedule.shouldStart(bar: averageColorInfo, hasShade: iconShade != nil)
+        else {
+            return
+        }
+        let displayID = panel.owningScreen.displayID
+        iconShadeTask = Task { [weak self] in
+            let shade = await MenuBarIconShade.read(displayID: displayID)
+            guard let self, !Task.isCancelled else { return }
+            iconShadeTask = nil
+            if let shade, shade != iconShade {
+                iconShade = shade
+            }
+            if iconShadeSchedule.finish(found: shade != nil) {
+                readIconShadeIfFollowed()
+            }
         }
     }
 

@@ -43,7 +43,7 @@ final class ThawBarPanel: NSPanel {
     private var hotkeyLocationOverride = false
 
     /// Suppress auto-hide when activating an inactive screen posts a notification racing with show().
-    private var lastShowTimestamp: Date?
+    private var lastShowTimestamp: ContinuousClock.Instant?
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -123,7 +123,7 @@ final class ThawBarPanel: NSPanel {
         self.canHide = false
     }
 
-    func performSetup(with appState: AppState) {
+    func performSetup(with appState: AppState, displayInvalidations: some Publisher<Void, Never>, displaySettlements: some Publisher<EnvironmentChange, Never>) {
         self.appState = appState
 
         // Observations delivers the current lock value before subsequent changes.
@@ -136,22 +136,19 @@ final class ThawBarPanel: NSPanel {
             }
         }
 
-        // Activating an inactive screen posts a screen-change notification; do not let it close a just-opened bar.
-        Publishers.Merge(
-            NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification),
-            NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
-        )
-        .sink { [weak self] _ in
-            guard
-                let self,
-                let ts = lastShowTimestamp,
-                Date().timeIntervalSince(ts) >= 1
-            else {
-                return
+        // Activating an inactive screen posts a screen change; don't let it close a bar opened under a second ago.
+        DisplayEnvironment.spaceOrDisplayChanges(merging: displayInvalidations)
+            .sink { [weak self] in
+                guard
+                    let self,
+                    let ts = lastShowTimestamp,
+                    ts.duration(to: .now) >= .seconds(1)
+                else {
+                    return
+                }
+                hide()
             }
-            hide()
-        }
-        .store(in: &cancellables)
+            .store(in: &cancellables)
 
         publisher(for: \.frame).map(\.size)
             .removeDuplicates()
@@ -163,7 +160,7 @@ final class ThawBarPanel: NSPanel {
             }
             .store(in: &cancellables)
 
-        colorManager.performSetup(with: self, appState: appState)
+        colorManager.performSetup(with: self, appState: appState, displaySettlements: displaySettlements)
     }
 
     /// Nil when the panel is wider than the screen and no placement fits.
@@ -334,12 +331,11 @@ final class ThawBarPanel: NSPanel {
         folderMembers: [String]? = nil,
         openedFrom iconFrame: CGRect? = nil
     ) {
-        guard let appState else {
-            return
-        }
+        guard let appState else { return }
         self.presentation = presentation
         folderMemberIdentifiers = presentation == .folder ? folderMembers : nil
         openingIconFrame = iconFrame
+        appState.menuBarManager.nativeAppHidingExperiment.refreshUserSwitchedOffApps(among: appState.itemManager.managedItems)
         let location = appState.settings.displaySettings.thawBarLocation(for: screen.displayID)
         let opensAtPointer = Self.concreteLocation(
             for: location,
@@ -370,7 +366,7 @@ final class ThawBarPanel: NSPanel {
         // Set navigation state and section before updating caches.
         appState.navigationState.isThawBarPresented = true
         currentSection = section
-        lastShowTimestamp = Date()
+        lastShowTimestamp = .now
 
         // Show cached data immediately; Observation renders background updates as they arrive.
         let inputs = ThawBarHostingView.Inputs(
@@ -463,17 +459,24 @@ final class ThawBarPanel: NSPanel {
 
     /// The live status window can move displays before the AX cache catches up.
     /// Consuming that icon's mouse-down would close the panel before its action toggles it open again.
+    /// With the screen's top given, a click above the icon at the top of the screen counts too.
     static nonisolated func isControlItemClick(
         appKitLocation: CGPoint,
         liveControlItemFrame: CGRect?,
+        liveScreenMaxY: CGFloat? = nil,
         quartzLocation: CGPoint?,
-        cachedControlItemFrame: CGRect?
+        cachedControlItemFrame: CGRect?,
+        cachedScreenMinY: CGFloat? = nil
     ) -> Bool {
-        if let liveControlItemFrame, liveControlItemFrame.contains(appKitLocation) {
-            return true
+        if let liveControlItemFrame {
+            let column = liveScreenMaxY.map { ControlItemHitColumn.appKit(liveControlItemFrame, screenMaxY: $0) } ?? liveControlItemFrame
+            if column.contains(appKitLocation) {
+                return true
+            }
         }
         if let quartzLocation, let cachedControlItemFrame {
-            return cachedControlItemFrame.contains(quartzLocation)
+            let column = cachedScreenMinY.map { ControlItemHitColumn.quartz(cachedControlItemFrame, screenMinY: $0) } ?? cachedControlItemFrame
+            return column.contains(quartzLocation)
         }
         return false
     }
@@ -485,13 +488,17 @@ final class ThawBarPanel: NSPanel {
             return
         }
         // With the icon off there is no icon to click, only its 2-pt stand-in.
+        // Without a live window the cached frame still decides.
+        let iconWindow = appState?.menuBarManager.section(withName: .visible)?.controlItem.window
         if let appState,
            appState.settings.general.showThawIcon,
            Self.isControlItemClick(
                appKitLocation: NSEvent.mouseLocation,
-               liveControlItemFrame: appState.menuBarManager.section(withName: .visible)?.controlItem.window?.frame,
+               liveControlItemFrame: iconWindow?.frame,
+               liveScreenMaxY: iconWindow?.screen?.frame.maxY,
                quartzLocation: MouseHelpers.locationCoreGraphics,
-               cachedControlItemFrame: controlItemAnchorBounds(appState: appState)
+               cachedControlItemFrame: controlItemAnchorBounds(appState: appState),
+               cachedScreenMinY: iconWindow?.screen.map { CGDisplayBounds($0.displayID).minY }
            )
         {
             return
