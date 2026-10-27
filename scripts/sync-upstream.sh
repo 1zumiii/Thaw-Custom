@@ -25,6 +25,19 @@ esac
 git remote set-url --push upstream DISABLED
 git config remote.pushDefault origin
 git fetch upstream development:refs/remotes/upstream/development
+# The local AGENTS.md is excluded, so a merge that brings upstream's would overwrite it.
+agents_backup=""
+if [[ -f AGENTS.md ]]; then
+    agents_backup="$(mktemp)"
+    cp AGENTS.md "$agents_backup"
+fi
+restore_agents() {
+    [[ -n "$agents_backup" ]] || return 0
+    git rm --cached -q --ignore-unmatch AGENTS.md
+    cp "$agents_backup" AGENTS.md
+    rm -f "$agents_backup"
+}
+trap restore_agents EXIT
 git merge --no-edit refs/remotes/upstream/development
 python3 scripts/check-localization.py
 echo 'Upstream merged locally. Review and test before pushing to origin.'
