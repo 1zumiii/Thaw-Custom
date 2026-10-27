@@ -7,7 +7,7 @@ The `release.yml` workflow reads the section matching the release tag
 (`## [tag]`) and uses it as the release notes for both the GitHub Release
 and the Sparkle appcast, unless overridden with the `release_notes` input.
 
-## [3.0.0-beta.4] - 2026-10-21
+## [3.0.0-beta.4] - 2026-10-26
 
 **macOS 27 only · Build 117**
 
