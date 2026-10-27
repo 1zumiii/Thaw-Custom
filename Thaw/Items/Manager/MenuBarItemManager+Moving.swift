@@ -591,46 +591,39 @@ extension MenuBarItemManager {
     ) {
         structuralNormalizationTask?.cancel()
         structuralNormalizationTask = nil
-        guard !isInStartupSettling, !moveCircuitBreaker.isOpen,
-              !isNotificationCenterLayoutSuspended
-        else {
+        guard WriteHold.first(
+            [.startupSettling, .circuitBreakerOpen, .notificationCenterSuspended],
+            in: structuralNormalizationSituation()
+        ) == nil else {
             repairs.withdraw(.structuralNormalization)
             return
         }
         repairs.request(.structuralNormalization, cause: cause)
         structuralNormalizationTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: after)
+            try? await Task.sleep(for: ControlResortHold.debounce(after, for: "structural normalization", self.map(ControlResortHold.Signal.init(of:))))
             guard !Task.isCancelled, let self else { return }
             structuralNormalizationTask = nil
-            guard let appState,
-                  !appState.isDraggingMenuBarItem,
-                  !isInStartupSettling,
-                  !isApplyingProfileLayout
-            else { return }
+            guard let appState else { return }
+            let situation = structuralNormalizationSituation()
+            guard WriteHold.first([.userDragging, .startupSettling, .profileApplying], in: situation) == nil else { return }
             // Manual arrangement turns this off, except to re-lay a stranded
             // visible control item, which the user cannot drag back.
-            let manualAllowsControlRelay: Bool = {
-                guard arrangementIsManual else { return true }
-                let settled = itemCache.managedItems
-                return !settled.isEmpty && ControlOrderRules.visibleControlIsStranded(among: settled)
-            }()
-            guard manualAllowsControlRelay else {
+            guard manualArrangementAllowsControlRelay else {
                 MenuBarItemManager.diagLog.debug("structural normalization: skipping, manual arrangement is on")
                 return
             }
             // During a reveal the writes would flicker the bar, so re-arm a
             // bounded number of times instead of dropping the work.
-            guard layoutPublication.canPublish(generation: layoutPublication.generation),
-                  appState.menuBarManager.sectionController.revealedSection == nil,
-                  !appState.menuBarManager.isRevealHideTransitionActive
-            else {
-                if deferralsRemaining > 0 {
-                    scheduleStructuralNormalization(
-                        cause: .rearmed,
-                        after: after,
-                        deferralsRemaining: deferralsRemaining - 1
-                    )
-                }
+            @MainActor func rearm(cause: RepairOrchestrator.Cause = .rearmed) {
+                guard deferralsRemaining > 0 else { return }
+                scheduleStructuralNormalization(cause: cause, after: after, deferralsRemaining: deferralsRemaining - 1)
+            }
+            // Until a ⌘-drag's sections are read off the bar, the bands would be
+            // laid from the old sections and put the dropped item back. The
+            // reading schedules this pass again once it is done.
+            guard manualMembershipTask == nil else { return }
+            guard WriteHold.first(StructuralNormalizationHolds.checks, in: situation) == nil else {
+                rearm()
                 return
             }
 
@@ -644,33 +637,33 @@ extension MenuBarItemManager {
                 try? await Task.sleep(for: .milliseconds(400))
                 settleWaits += 1
             }
-            guard !Task.isCancelled else { return }
+            // Taking the lane clears the waiting causes, so read this first.
+            let followsUserDrag = repairs.ledger.causesWaiting(for: .structuralNormalization).contains(.userDragEnded)
             // Waiting is over; from here on this writes, so take the lane.
-            guard let hold = await repairs.enter(.structuralNormalization) else { return }
+            guard !Task.isCancelled, let hold = await repairs.enter(.structuralNormalization) else { return }
             var hasLeftLane = false
             defer {
                 if !hasLeftLane {
                     repairs.leave(hold)
                 }
             }
-            guard layoutPublication.canPublish(generation: layoutPublication.generation) else {
-                if deferralsRemaining > 0 {
-                    scheduleStructuralNormalization(
-                        cause: .rearmed,
-                        after: after,
-                        deferralsRemaining: deferralsRemaining - 1
-                    )
-                }
+            // A ⌘-drag can start or end while this waited, and its reading
+            // schedules the pass again once it is done.
+            let admitted = structuralNormalizationSituation()
+            guard WriteHold.first([.userDragging, .membershipReadPending], in: admitted) == nil else { return }
+            guard WriteHold.first(StructuralNormalizationHolds.checks, in: admitted) == nil,
+                  ControlResortHold.allowsResort(for: "structural normalization", .init(of: self))
+            else {
+                // The lane already took the drag's cause, so the next pass needs it again.
+                rearm(cause: followsUserDrag ? .userDragEnded : .rearmed)
                 return
             }
-
-            // The debounce and settle waits can span a screen lock.
-            guard !refuseMenuBarMutationWhileScreenLocked("structural normalization") else { return }
 
             // The cache, not a fresh walk: the walk omits concealed members,
             // whose stale weights would then sit inside the new visible band.
             let settledItems = itemCache.managedItems
-            guard !settledItems.isEmpty else { return }
+            // The debounce and settle waits can span a screen lock.
+            guard !refuseMenuBarMutationWhileScreenLocked("structural normalization"), !settledItems.isEmpty else { return }
             if !arrangementIsManual, !menuBarAgentIgnoresPreferredPositions,
                ControlOrderRules.trailingSiriIsMisplaced(in: settledItems) {
                 // Siri needs one row repaired; no dividers required, which
@@ -692,15 +685,18 @@ extension MenuBarItemManager {
                 }
                 return
             }
-            guard let controlItems = controlItemPair(in: settledItems) else { return }
-
-            if restoreStructuralControlOrder(
-                controlItems: controlItems,
-                items: settledItems,
-                permit: StoreWritePermit(hold)
-            ) {
-                moveActivity.noteMoveOperation()
+            if let (controlItems, withDividers) = ControlOrderRules.withDividers(settledItems, cacheDividers()) {
+                // The restore pins the saved order. A drag made with a section
+                // open is still held out of it, so record it first.
+                if followsUserDrag {
+                    mirrorSavedSectionOrderIfSettled(from: itemCache, controlItems: controlItems, placedByUser: true)
+                }
+                if restoreStructuralControlOrder(controlItems: controlItems, items: withDividers, permit: StoreWritePermit(hold)) {
+                    moveActivity.noteMoveOperation()
+                }
             }
+            // The passes below have never run on macOS 27, since the cache holds no dividers; they stay off until checked live.
+            guard controlItemPair(in: settledItems) != nil else { return }
 
             // Respace concealed bands while invisible, so the host's remembered
             // slots make the next reveal expand in authored order.
@@ -793,54 +789,18 @@ extension MenuBarItemManager {
 
     /// Applies the saved order before the restriction is released, so the bar
     /// reveals straight into it without moving Thaw's click target.
-    func applySavedOrderBeforeReveal() {
+    func applySavedOrderBeforeReveal(cause: RepairOrchestrator.Cause) {
         guard appState != nil
         else {
             return
         }
 
         let cachedItems = itemCache.managedItems
-        let controlItemWindowIDs = liveControlItemWindowIDs()
-        let discoveredControlItems = controlItemPair(in: cachedItems)
-        let controlItems: ControlItemPair
-        if let discoveredControlItems {
-            controlItems = discoveredControlItems
-        } else {
-            // Collapsed dividers have no AX element on macOS 27; the store
-            // resolves these synthetic stand-ins by tag and title.
-            let ourPID = ProcessInfo.processInfo.processIdentifier
-            let leadingX = itemCache.displayID.map { CGDisplayBounds($0).minX }
-                ?? (NSScreen.main?.frame.minX ?? 0)
-            let hidden = MenuBarItem(
-                tag: .hiddenControlItem,
-                windowID: controlItemWindowIDs.hidden ?? 0,
-                ownerPID: ourPID,
-                sourcePID: ourPID,
-                bounds: CGRect(x: leadingX, y: 0, width: 0, height: 0),
-                title: ControlItem.Identifier.hidden.rawValue,
-                isOnScreen: false
-            )
-            let alwaysHidden: MenuBarItem? = if configuration.isAlwaysHiddenSectionEnabled {
-                MenuBarItem(
-                    tag: .alwaysHiddenControlItem,
-                    windowID: controlItemWindowIDs.alwaysHidden ?? 0,
-                    ownerPID: ourPID,
-                    sourcePID: ourPID,
-                    bounds: CGRect(x: leadingX, y: 0, width: 0, height: 0),
-                    title: ControlItem.Identifier.alwaysHidden.rawValue,
-                    isOnScreen: false
-                )
-            } else {
-                nil
-            }
-            controlItems = ControlItemPair(
-                hidden: hidden,
-                alwaysHidden: alwaysHidden
-            )
-        }
+        // The cache never holds the dividers.
+        let controlItems = cacheDividers()
 
         if !arrangementIsManual,
-           repairs.writeNow(.preRevealOrder, cause: .sectionRevealed, { permit in
+           repairs.writeNow(.preRevealOrder, cause: cause, { permit in
                restoreStructuralControlOrder(
                    controlItems: controlItems,
                    items: cachedItems,
@@ -1040,15 +1000,18 @@ extension MenuBarItemManager {
 
     /// Scores one reveal-time section boundary repair against the breaker the
     /// visible-strand pass uses.
-    private func recordSectionBoundaryRepairOutcome(for item: MenuBarItem, repaired: Bool) {
+    private func recordSectionBoundaryRepairOutcome(for item: MenuBarItem, judgement: MoveJudgement) {
         let id = PostRestrictionRepairItemID(item)
-        let outcome = boundaryRepairBreaker.record(repaired: repaired, for: id, tripLimit: Self.boundaryRepairTripLimit)
-        guard outcome.suppressed else { return }
-        MenuBarItemManager.diagLog.warning(
-            "macOS 27 section boundary repair: suppressing \(item.logString) after " +
-                "\(Self.boundaryRepairTripLimit) failed reveals for " +
-                "\(Int(Self.boundaryRepairSuppressionCooldown)) s"
-        )
+        let outcome = boundaryRepairBreaker.record(judgement, for: id, tripLimit: Self.boundaryRepairTripLimit)
+        if case let .unjudgeable(reason) = judgement {
+            MenuBarItemManager.diagLog.info("macOS 27 section boundary repair: can't judge \(item.logString) (\(reason.rawValue)); leaving it for \(Self.boundaryRepairSuppressionCooldown.components.seconds) s")
+        } else if outcome.suppressed {
+            MenuBarItemManager.diagLog.warning(
+                "macOS 27 section boundary repair: suppressing \(item.logString) after " +
+                    "\(Self.boundaryRepairTripLimit) failed reveals for " +
+                    "\(Self.boundaryRepairSuppressionCooldown.components.seconds) s"
+            )
+        }
     }
 
     /// Repairs assignments written by earlier macOS 27 builds that concealed
@@ -1138,7 +1101,7 @@ extension MenuBarItemManager {
                     items: liveItems,
                     item: liveItem,
                     section: section,
-                    controlItems: controlItems,
+                    controlItems: ControlOrderRules.boundaryControls(controlItems, revealedSection: revealedSection),
                     experimentalSystemItemHiding: experimentalSystemItemHiding
                 ),
                 let destination = MenuBarLayoutPlannerProvider.current.sectionBoundaryDestination(
@@ -1149,13 +1112,14 @@ extension MenuBarItemManager {
                 continue
             }
 
+            MenuBarItemManager.diagLog.debug(DiagnosticLines.boundaryRepair(liveItem, section: section, controlItems: controlItems, revealed: revealedSection))
             // Runs on every reveal, so it shares the strand pass's breaker and
             // re-arms. The cooldown is checked here because those re-arms only
             // run on a restriction change.
             let repairID = PostRestrictionRepairItemID(liveItem)
             if boundaryRepairBreaker.isSuppressed(repairID) {
                 if boundaryRepairBreaker.suppressionHolds(
-                    for: repairID, now: Date(), cooldown: Self.boundaryRepairSuppressionCooldown
+                    for: repairID, now: .now, cooldown: Self.boundaryRepairSuppressionCooldown
                 ) {
                     MenuBarItemManager.diagLog.debug(
                         "macOS 27 section boundary repair skipped for \(liveItem.logString): suppressed"
@@ -1167,6 +1131,7 @@ extension MenuBarItemManager {
 
             // The ordinary move: a verified store write, then a drag, since the
             // agent ignores the row for a re-allowed item.
+            let itemsBefore = liveItems
             var repaired = false
             do {
                 let moved = try await move(
@@ -1223,7 +1188,7 @@ extension MenuBarItemManager {
                     "macOS 27 section boundary repair failed for \(liveItem.logString): \(error)"
                 )
             }
-            recordSectionBoundaryRepairOutcome(for: liveItem, repaired: repaired)
+            recordSectionBoundaryRepairOutcome(for: liveItem, judgement: .judge(repaired: repaired, item: liveItem, before: itemsBefore, after: liveItems))
         }
 
         // Visible is expressed by absence from sectionAssignment, so the loop
@@ -1303,8 +1268,7 @@ extension MenuBarItemManager {
         commit: () -> Void
     ) async {
         // In Manual only an explicit Layout edit, which seats the item itself, may change a section.
-        // Thaw Bar Only items are exempt: macOS never draws them.
-        if arrangementForbidsMoves, !items.allSatisfy(isThawBarOnly) {
+        if arrangementForbidsMoves {
             MenuBarItemManager.diagLog.info(
                 "Section transition to \(section.logString) refused: manual arrangement is on"
             )
@@ -1369,18 +1333,10 @@ extension MenuBarItemManager {
             return
         }
 
-        var previousDragged: MenuBarItem?
+        var previousMoved: MenuBarItem?
         for item in items where item.isOnScreen && !item.bounds.isEmpty {
             guard !Task.isCancelled else { return }
-            guard let destination = sectionTransitionDestination(
-                for: section,
-                after: previousDragged
-            ) else {
-                MenuBarItemManager.diagLog.warning(
-                    "No divider to drag \(item.logString) behind before concealment"
-                )
-                break
-            }
+            let destination = sectionTransitionDestination(for: section, after: previousMoved)
             do {
                 // Position-only: the conceal assertion hides these items
                 // whether or not the write lands, so a synthetic drag would
@@ -1394,18 +1350,18 @@ extension MenuBarItemManager {
                     allowSyntheticDrag: false,
                     permit: permit
                 ) {
-                    previousDragged = item
+                    previousMoved = item
                     MenuBarItemManager.diagLog.info(
-                        "Dragged \(item.logString) into the \(section.logString) band before concealment"
+                        "Moved \(item.logString) into the \(section.logString) band before concealment"
                     )
                 } else {
                     MenuBarItemManager.diagLog.warning(
-                        "Pre-concealment drag declined for \(item.logString) \(destination.logString)"
+                        "Pre-concealment move declined for \(item.logString) \(destination.logString)"
                     )
                 }
             } catch {
                 MenuBarItemManager.diagLog.error(
-                    "Pre-concealment drag failed for \(item.logString): \(error)"
+                    "Pre-concealment move failed for \(item.logString): \(error)"
                 )
             }
         }
@@ -1418,8 +1374,8 @@ extension MenuBarItemManager {
     private func sectionTransitionDestination(
         for section: MenuBarSection.Name,
         after predecessor: MenuBarItem?
-    ) -> MoveDestination? {
-        guard let controlItems = lastKnownControlItems else { return nil }
+    ) -> MoveDestination {
+        let controlItems = cacheDividers()
         let bandBoundary: MoveDestination = switch section {
         case .visible:
             .rightOfItem(controlItems.hidden)
@@ -1449,9 +1405,9 @@ extension MenuBarItemManager {
         after predecessor: MenuBarItem? = nil,
         permit: borrowing StoreWritePermit
     ) -> Bool {
-        guard let appState, let controlItems = lastKnownControlItems,
-              let destination = sectionTransitionDestination(for: section, after: predecessor)
-        else { return false }
+        guard let appState else { return false }
+        let destination = sectionTransitionDestination(for: section, after: predecessor)
+        let controlItems = cacheDividers()
         var liveItems = managedItems
         liveItems.append(controlItems.hidden)
         if let alwaysHidden = controlItems.alwaysHidden {
@@ -2460,7 +2416,7 @@ extension MenuBarItemManager {
         // set is satisfied by the first enumeration.
         let knownAbsent = wantedIDs.filter {
             missingRepublishMemo.isKnownAbsent($0) || MoveTargeting.namesPinnedSystemItem($0)
-        }
+        }.union(RepublishAbsenceMemo.unreachable(wanted: wantedIDs, liveNamespaces: Set(itemCache.managedItems.map(\.tag.namespace.description)), runningBundleIDs: await RunningApplicationSnapshot.current().bundleIdentifiers))
         let awaitedIDs = wantedIDs.subtracting(knownAbsent)
         if !knownAbsent.isEmpty {
             MenuBarItemManager.diagLog.debug(
@@ -2527,7 +2483,7 @@ extension MenuBarItemManager {
                 controller: controller,
                 nudgeRan: nudgeRan
             )
-        } else {
+        } else if !SettledSectionOrder.isStored(section: section, desiredOrder: desiredOrder, liveItems: liveItems, dividers: cacheDividers()) {
             let trace = tracePositionWrite(
                 context: "section apply \(section.logString) reason=\(reason)",
                 items: liveItems,
@@ -2881,11 +2837,11 @@ extension MenuBarItemManager {
         }
         appState?.menuBarManager.sectionController.notePreferredPositionsSelfWrite()
         let nudgeRan = requestMenuBarAgentPositionRefresh()
-        // Without the nudge the agent never re-reads the table, so polling is
-        // pointless. The write stays for the next re-sort to agree with.
-        guard nudgeRan else {
+        // A concealed item seats by this weight on its next reveal; an un-nudged
+        // write is still observed. See preferredWriteAppliesOnReveal.
+        if preferredWriteAppliesOnReveal(item, to: destination, transitionSection: transitionSection) {
             MenuBarItemManager.diagLog.info(
-                "Preferred-position write recorded but not awaited for \(item.logString): nudge suppressed; falling back"
+                "Preferred-position write stored for concealed \(item.logString); it applies on the next reveal"
             )
             return false
         }

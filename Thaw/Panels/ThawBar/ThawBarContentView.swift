@@ -35,7 +35,6 @@ struct ThawBarContentView: View {
     let screen: NSScreen
     let section: MenuBarSection.Name
     /// Set for both small bars, which carry only the Thaw Bar Only items.
-    let showsOnlyThawBarOnlyItems: Bool
     /// A folder's members, when the panel shows one folder.
     let folderMembers: [String]?
 
@@ -49,7 +48,6 @@ struct ThawBarContentView: View {
         visibleControlItem: ControlItem?,
         screen: NSScreen,
         section: MenuBarSection.Name,
-        showsOnlyThawBarOnlyItems: Bool,
         folderMembers: [String]?
     ) {
         self.appState = appState
@@ -61,7 +59,6 @@ struct ThawBarContentView: View {
         self.visibleControlItem = visibleControlItem
         self.screen = screen
         self.section = section
-        self.showsOnlyThawBarOnlyItems = showsOnlyThawBarOnlyItems
         self.folderMembers = folderMembers
         self._visibleControlItemState = State(initialValue: visibleControlItem?.state ?? .hideSection)
     }
@@ -126,9 +123,7 @@ struct ThawBarContentView: View {
         using images: [MenuBarItemTag: MenuBarItemDisplayImage]
     ) -> [CGFloat] {
         guard let maxHeight = itemMaxHeight, maxHeight > 0 else { return [] }
-        let rows = stride(from: 0, to: items.count, by: gridColumns).map { start in
-            Array(items[start ..< Swift.min(start + gridColumns, items.count)])
-        }
+        let rows = items.chunks(ofCount: gridColumns)
         return (0 ..< gridColumns).map { col in
             rows.compactMap { row in
                 guard col < row.count else { return nil }
@@ -195,17 +190,14 @@ struct ThawBarContentView: View {
     }
 
     var body: some View {
-        // Thaw Bar Only items have a bar of their own, opened from their icon.
         let items = if let folderMembers {
             folderMembers.compactMap { identifier in
                 itemManager.managedItems.first {
                     MenuBarItemTag.canonicalPersistentIdentifier($0.uniqueIdentifier) == identifier
                 }
             }
-        } else if showsOnlyThawBarOnlyItems {
-            itemManager.thawBarOnlyItems
         } else {
-            itemManager.managedItems(for: section).filter { !itemManager.isThawBarOnly($0) }
+            UserSwitchedOffApps.excluding(itemManager.managedItems(for: section), switchedOff: menuBarManager.nativeAppHidingExperiment.userSwitchedOffBundleIDs)
         }
         ZStack {
             ThawBarChrome(
@@ -423,9 +415,7 @@ struct ThawBarContentView: View {
                     let columnWidths = self.columnWidths(items: items, using: images)
                     ScrollView(.vertical) {
                         VStack(spacing: 0) {
-                            let rows = stride(from: 0, to: items.count, by: gridColumns).map { start in
-                                Array(items[start ..< Swift.min(start + gridColumns, items.count)])
-                            }
+                            let rows = items.chunks(ofCount: gridColumns)
                             ForEach(Array(rows.enumerated()), id: \.element.first?.uniqueIdentifier) { rowIndex, rowItems in
                                 HStack(spacing: itemSpacing) {
                                     ForEach(Array(rowItems.enumerated()), id: \.element.uniqueIdentifier) { colIndex, item in

@@ -39,6 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         #endif
 
+        // Another copy must be resolved before this one touches the menu bar, permissions or native hiding.
+        guard SingleInstanceGuard.enforce() else { return }
+
         // Set AX timeout before creating elements: synchronous IPC can stall when a target stops pumping events.
         // Override with defaults write com.stonerl.Thaw axMessagingTimeout -float <seconds>.
         AXElement.defaultMessagingTimeout = Float(
@@ -52,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         OverflowSpacer.shared.performSetup(with: appState)
 
         // Descenders observe their setting live and use app state to hit-test on-screen items.
-        notchPanelController.performSetup(with: appState)
+        notchPanelController.performSetup(with: appState, displayInvalidations: appState.displayEnvironment.invalidations)
 
         // Register thaw:// early so external tools can trigger background actions; individual actions may activate Thaw.
         NSAppleEventManager.shared().setEventHandler(
@@ -69,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for item in NSApp.mainMenu?.items ?? [] {
             item.isHidden = true
         }
+        WindowMenuTrimmer.shared.watch { [weak appState] in appState?.hasOpenWindow ?? false }
 
         // Allow hiding the mouse while the app is in the background
         // to make menu bar item movement less jarring.
@@ -162,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminationTimeoutTask?.cancel()
         isPreparingForTermination = true
         hasRepliedToTerminationRequest = false
-        appState.diagLog.info("Application asked to terminate - restoring blocked items asynchronously")
+        appState.diagLog.info("Application asked to terminate \(QuitRequestSource.current()) - restoring blocked items asynchronously")
         appState.appRunningTriggers.stop()
 
         Task { @MainActor in
@@ -285,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch host {
         case "set", "toggle", "get", "authorize", "reveal-item",
-             "list-items", "activate-item", "list-profiles", "apply-profile", "get-appearance":
+             "list-items", "activate-item", "list-profiles", "apply-profile", "get-appearance", "move-item":
             handleSettingsURL(url, host: host, senderBundleId: senderBundleId)
             return
         default:
@@ -405,7 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             handleGetURL(url, sender: effectiveBundleId)
         case "reveal-item":
             handleRevealItemURL(url, sender: effectiveBundleId)
-        case "list-items", "activate-item", "list-profiles", "apply-profile", "get-appearance":
+        case "list-items", "activate-item", "list-profiles", "apply-profile", "get-appearance", "move-item":
             handleLauncherURL(url, sender: effectiveBundleId)
         default:
             break

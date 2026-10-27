@@ -100,8 +100,10 @@ jobs:
 
       - name: Checkout source
         id: source
-        uses: ./.github/actions/checkout-source
+        uses: thaw-app/org-ci/actions/checkout-source@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
+          project-name: Thaw.xcodeproj
+          target-name: Thaw
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
 
@@ -154,55 +156,30 @@ jobs:
 
       - name: Resolve release notes
         id: notes
-        env:
-          TAG: ${{ steps.meta.outputs.tag }}
-          RELEASE_NOTES_INPUT: ${{ inputs.release_notes }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os
-          import re
-          import uuid
-
-          tag = os.environ["TAG"]
-          notes = os.environ.get("RELEASE_NOTES_INPUT", "")
-          source = "release_notes input"
-
-          # Without manual notes, use this tag's CHANGELOG.md section ("## [x.y.z]" to
-          # the next "## ") from the checked-out release tag.
-          candidates = ["CHANGELOG.md", "Thaw/Resources/CHANGELOG.md"]
-          changelog = next((p for p in candidates if os.path.isfile(p)), None)
-          if not notes.strip() and changelog:
-              text = open(changelog, encoding="utf-8").read()
-              heading = re.compile(
-                  r"^##\s+\[?" + re.escape(tag) + r"\]?.*$", re.MULTILINE
-              )
-              match = heading.search(text)
-              if match:
-                  rest = text[match.end():]
-                  next_heading = re.search(r"^##\s+", rest, re.MULTILINE)
-                  section = rest[: next_heading.start()] if next_heading else rest
-                  notes = section.strip()
-                  source = changelog
-              else:
-                  source = f"none (no {changelog} section for {tag})"
-          elif not notes.strip():
-              source = "none (no release_notes input, no CHANGELOG.md)"
-
-          delimiter = f"notes_{uuid.uuid4().hex}"
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-              f.write(f"body<<{delimiter}\n{notes}\n{delimiter}\n")
-
-          print(f"Release notes source: {source}")
-          PY
+        uses: thaw-app/org-ci/actions/release-notes@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
+        with:
+          tag: ${{ steps.meta.outputs.tag }}
+          release-notes: ${{ inputs.release_notes }}
+          changelog-paths: |
+            CHANGELOG.md
+            Thaw/Resources/CHANGELOG.md
 
       - name: Select latest installed Xcode (including betas)
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
           xcode-version: latest
 
+      # The Thaw target's lint build phase requires the pinned SwiftLint on PATH.
+      # Tags from before the pin have no installer and no such requirement.
+      - name: Install pinned SwiftLint
+        run: |
+          if [ -f scripts/install-swiftlint.sh ]; then
+            sh scripts/install-swiftlint.sh
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+
       - name: Configure signing
-        uses: thaw-app/org-ci/actions/configure-signing@d90bbc87aa4dff91d3bc9e30fb6ceef0765bd986
+        uses: thaw-app/org-ci/actions/configure-signing@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           apple-application-cert: ${{ secrets.APPLE_APPLICATION_CERT }}
           apple-application-cert-password: ${{ secrets.APPLE_APPLICATION_CERT_PASSWORD }}
@@ -211,7 +188,7 @@ jobs:
           apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Build
-        uses: thaw-app/org-ci/actions/build@d90bbc87aa4dff91d3bc9e30fb6ceef0765bd986
+        uses: thaw-app/org-ci/actions/build@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
           project-name: ${{ steps.source.outputs.project-name }}
@@ -219,14 +196,14 @@ jobs:
           deployment-target: ${{ steps.source.outputs.deployment-target }}
 
       - name: Export Archive
-        uses: thaw-app/org-ci/actions/export-and-package@d90bbc87aa4dff91d3bc9e30fb6ceef0765bd986
+        uses: thaw-app/org-ci/actions/export-and-package@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
           app-name: ${{ env.APP_NAME }}
           dmg-name: ${{ env.DMG_NAME }}
 
       - name: Notarize
-        uses: thaw-app/org-ci/actions/notarize-and-validate@d90bbc87aa4dff91d3bc9e30fb6ceef0765bd986
+        uses: thaw-app/org-ci/actions/notarize-and-validate@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           dmg-name: ${{ env.DMG_NAME }}
           app-name: ${{ env.APP_NAME }}
@@ -293,9 +270,33 @@ jobs:
             echo "dmg-digest=sha256:${dmg_hex}"
           } >> "$GITHUB_OUTPUT"
 
+      # generate_appcast drops the notes of prior archives it re-reads for
+      # deltas; Prepare appcasts restores them from this copy.
+      - name: Snapshot current appcast
+        id: previous-appcast
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          path="$RUNNER_TEMP/appcast-before.xml"
+          # Raw, because the JSON form leaves content empty above 1 MB.
+          if gh api -H "Accept: application/vnd.github.raw" \
+            "repos/${UPDATES_REPOSITORY}/contents/appcast.xml?ref=gh-pages" \
+            > "$path" 2> "$RUNNER_TEMP/appcast-before.err" && [[ -s "$path" ]]; then
+            echo "path=$path" >> "$GITHUB_OUTPUT"
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/appcast-before.err"; then
+            echo "No appcast yet; nothing to restore"
+            echo "path=" >> "$GITHUB_OUTPUT"
+          else
+            # Publishing without it would wipe the notes of every prior release.
+            cat "$RUNNER_TEMP/appcast-before.err"
+            echo "::error::Could not snapshot the current appcast"
+            exit 1
+          fi
+
       - name: Sparkle ZIP and appcast
         id: sparkle
-        uses: thaw-app/org-ci/actions/sparkle-release@d90bbc87aa4dff91d3bc9e30fb6ceef0765bd986
+        uses: thaw-app/org-ci/actions/sparkle-release@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           tag: ${{ steps.meta.outputs.tag }}
           channel: ${{ steps.meta.outputs.channel }}
@@ -318,6 +319,7 @@ jobs:
         with:
           appcast-path: ${{ steps.sparkle.outputs.appcast-path }}
           release-tag: ${{ steps.meta.outputs.tag }}
+          previous-appcast-path: ${{ steps.previous-appcast.outputs.path }}
 
       - name: Collect update assets
         id: update-assets
@@ -405,7 +407,7 @@ jobs:
 
       - name: Publish appcast to updates gh-pages
         if: ${{ inputs.publish_appcast && inputs.publish_release && !inputs.dry_run }}
-        uses: thaw-app/org-ci/actions/publish-file-to-branch@d90bbc87aa4dff91d3bc9e30fb6ceef0765bd986
+        uses: thaw-app/org-ci/actions/publish-file-to-branch@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           repository: ${{ env.UPDATES_REPOSITORY }}
           branch: gh-pages
@@ -422,7 +424,7 @@ jobs:
       # Keep historical 1.x entries and the 2.x line, never 3.x or newer.
       - name: Mirror 2.x appcast to legacy stonerl Pages
         if: ${{ inputs.publish_appcast && inputs.publish_release && !inputs.dry_run && startsWith(steps.meta.outputs.tag, '2.') }}
-        uses: thaw-app/org-ci/actions/publish-file-to-branch@d90bbc87aa4dff91d3bc9e30fb6ceef0765bd986
+        uses: thaw-app/org-ci/actions/publish-file-to-branch@cfa52194f39013d6f54e6f5a14dc57cec3a20e9b
         with:
           repository: ${{ env.LEGACY_APPCAST_REPOSITORY }}
           branch: main
@@ -579,7 +581,7 @@ jobs:
 
       - name: Upload dry run artifacts
         if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dry-run-${{ steps.meta.outputs.tag }}
           if-no-files-found: warn
@@ -629,13 +631,13 @@ jobs:
       contents: write
     steps:
       - name: Download DMG provenance
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.attest-dmg.outputs.artifact-name }}
           path: provenance
 
       - name: Download SBOM provenance
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.attest-sbom.outputs.artifact-name }}
           path: provenance

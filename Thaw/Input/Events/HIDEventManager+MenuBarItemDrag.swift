@@ -8,6 +8,7 @@
 
 import AppKit
 import Foundation
+import MenuBarModel
 
 extension HIDEventManager {
     // MARK: Handle Menu Bar Item Drag Stop
@@ -15,6 +16,8 @@ extension HIDEventManager {
     /// Ends an item drag, and arranges for the cache to catch up with wherever
     /// the user dropped things.
     func handleMenuBarItemDragStop() {
+        // Every release forgets the grabbed item, also when no drag started.
+        pressedItemTag = nil
         guard isDraggingMenuBarItem else {
             return
         }
@@ -34,6 +37,14 @@ extension HIDEventManager {
 
     // MARK: Handle Menu Bar Item Drag Start
 
+    /// The item under a ⌘-press, read from the event's position, since the
+    /// pointer may be over a neighbor by the time the drag starts.
+    func notePressForItemDrag(_ event: NSEvent, appState: AppState) {
+        pressedItemTag = event.modifierFlags.contains(.command)
+            ? managedItem(appState: appState, at: event.cgEvent?.location ?? MouseHelpers.locationCoreGraphics)?.tag
+            : nil
+    }
+
     /// Notices the start of an item drag.
     ///
     /// Holding command is what makes a drag in the menu bar a move of the item
@@ -52,10 +63,15 @@ extension HIDEventManager {
         }
 
         isDraggingMenuBarItem = true
+        appState.itemManager.repairs.interruptAutomaticWork(by: .userDragStarted)
 
         // Optionally bring every section out for the duration of the drag, so
         // the user can drop an item into one that is currently put away.
-        guard configuration.showAllSectionsOnUserDrag else {
+        guard Self.dragRevealsSections(
+            enabled: configuration.showAllSectionsOnUserDrag,
+            nativeHidingActive: appState.menuBarManager.nativeAppHidingExperiment.isActive,
+            draggedTag: pressedItemTag
+        ) else {
             return
         }
         // Reveal through the section itself, inline: redrawing the dividers
@@ -67,6 +83,17 @@ extension HIDEventManager {
         for section in appState.menuBarManager.sections {
             section.controlItem.state = .showSection
         }
+    }
+
+    /// Only hideable items the cache holds open the sections, so indicators and
+    /// control items don't. With native hiding a reveal would rebuild the bar under the drag.
+    static nonisolated func dragRevealsSections(
+        enabled: Bool,
+        nativeHidingActive: Bool,
+        draggedTag: MenuBarItemTag?
+    ) -> Bool {
+        guard enabled, !nativeHidingActive, let draggedTag else { return false }
+        return draggedTag.canBeHidden
     }
 
     /// The deepest section a drag opens, so every section is a drop target.

@@ -42,12 +42,12 @@ struct OnboardingBentoView: View {
     }
 
     /// Row heights at the default text size; with title, controls and gutters
-    /// they total 574 against the window's ideal 580.
+    /// the four rows total 676 against the window's ideal 680.
     ///
     /// Scaled with Dynamic Type so captions do not clip at Larger Text; the
     /// .contentMinSize window grows to fit.
-    @ScaledMetric(relativeTo: .body) private var largeRowHeight: CGFloat = 168
-    @ScaledMetric(relativeTo: .body) private var smallRowHeight: CGFloat = 128
+    @ScaledMetric(relativeTo: .body) private var largeRowHeight: CGFloat = 150
+    @ScaledMetric(relativeTo: .body) private var smallRowHeight: CGFloat = 120
 
     var body: some View {
         VStack(spacing: ThawSpacing.inset) {
@@ -74,22 +74,23 @@ struct OnboardingBentoView: View {
             // Heights sit on the tiles, not the rows: a modifier on a
             // GridRow wraps it in ModifiedContent, and the grid then
             // lays it out as one cell instead of a row.
+            // Two cards a row, so each is half the window wide. Four across
+            // left every card too narrow for its demo and caption.
             GridRow {
                 tile(.find, index: 0, height: largeRowHeight)
-                    .gridCellColumns(2)
                 tile(.style, index: 1, height: largeRowHeight)
-                    .gridCellColumns(2)
             }
             GridRow {
                 tile(.reveal, index: 2, height: smallRowHeight)
                 tile(.thawBar, index: 3, height: smallRowHeight)
+            }
+            GridRow {
                 tile(.triggers, index: 4, height: smallRowHeight)
                 tile(.profiles, index: 5, height: smallRowHeight)
             }
             GridRow {
                 tile(.zen, index: 6, height: smallRowHeight)
                 tile(.integrations, index: 7, height: smallRowHeight)
-                    .gridCellColumns(3)
             }
         }
     }
@@ -106,35 +107,26 @@ struct OnboardingBentoView: View {
 
     private var controls: some View {
         HStack(spacing: ThawSpacing.gutter) {
-            Picker("Simple Mode", selection: $simpleMode) {
-                Text("Simple Mode").tag(true)
-                Text("All Settings").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            // Sized to its own labels rather than to a point width: both
-            // segments are translated and neither fits 180 in every language.
+            ThawPillPicker(selection: $simpleMode, options: [
+                ThawPillPicker.Option(true, title: "Simple Mode"),
+                ThawPillPicker.Option(false, title: "All Settings"),
+            ])
+            // Held at its labels' size, since both are translated and neither may be cut off.
             .fixedSize()
             .accessibilityLabel(Text("Simple Mode"))
 
             if Constants.supportsSparkleUpdates {
                 Toggle("Check for updates automatically", isOn: $automaticUpdates)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(.thawCheckbox)
             }
 
             Spacer()
 
-            Button {
+            OnboardingPrimaryButton {
                 finish(simpleMode: simpleMode, pane: nil)
             } label: {
                 Text(finishesFlow ? "Open \(Constants.displayName)" : "Continue")
-                    .font(ThawType.heading)
-                    // A minimum, not a width: "Open Thaw" is translated and
-                    // a hard 140 clips its longer forms.
-                    .frame(minWidth: 140, minHeight: 34)
             }
-            .buttonStyle(.glassProminent)
-            .keyboardShortcut(.defaultAction)
         }
     }
 

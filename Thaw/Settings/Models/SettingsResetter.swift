@@ -33,14 +33,12 @@ extension AppSettings {
         general.lastCustomThawIcon = nil
         general.customThawIconIsTemplate = Defaults.DefaultValue.customThawIconIsTemplate
         general.simpleMode = Defaults.DefaultValue.simpleMode
+        general.simpleModeShowsPreview = Defaults.DefaultValue.simpleModeShowsPreview
         general.showSettingDescriptions = Defaults.DefaultValue.showSettingDescriptions
         general.lockThawBarPosition = Defaults.DefaultValue.lockThawBarPosition
-        general.enableThawBarOnly = Defaults.DefaultValue.enableThawBarOnly
         general.openHiddenItemsInMenuBar = Defaults.DefaultValue.openHiddenItemsInMenuBar
         general.roundScreenCorners = Defaults.DefaultValue.roundScreenCorners
         general.screenCornerRadius = Defaults.DefaultValue.screenCornerRadius
-        general.showThawBarOnlyWithInlineReveal = Defaults.DefaultValue.showThawBarOnlyWithInlineReveal
-        general.showThawBarOnlyLauncher = Defaults.DefaultValue.showThawBarOnlyLauncher
         general.useThawBar = Defaults.DefaultValue.useThawBar
         general.useThawBarOnlyOnNotchedDisplay = Defaults.DefaultValue.useThawBarOnlyOnNotchedDisplay
         general.thawBarLocation = Defaults.DefaultValue.thawBarLocation
@@ -59,6 +57,8 @@ extension AppSettings {
         advanced.showAllSectionsOnUserDrag = Defaults.DefaultValue.showAllSectionsOnUserDrag
         appState?.itemManager.updateNewItemsPlacement(section: .hidden, arrangedViews: [])
         advanced.sectionDividerStyle = Defaults.DefaultValue.sectionDividerStyle
+        advanced.customSectionDividerImage = nil
+        advanced.customSectionDividerIsTemplate = Defaults.DefaultValue.customSectionDividerIsTemplate
         advanced.menuBarArrangementMode = Defaults.DefaultValue.menuBarArrangementMode
         advanced.hideApplicationMenus = Defaults.DefaultValue.hideApplicationMenus
         advanced.enableSecondaryContextMenu = Defaults.DefaultValue.enableSecondaryContextMenu
@@ -66,12 +66,10 @@ extension AppSettings {
         advanced.tooltipDelay = Defaults.DefaultValue.tooltipDelay
         advanced.showMenuBarTooltips = Defaults.DefaultValue.showMenuBarTooltips
         advanced.iconRefreshInterval = Defaults.DefaultValue.iconRefreshInterval
-        advanced.menuBarItemAlertRevealCooldown = Defaults.DefaultValue.menuBarItemAlertRevealCooldown
         advanced.autoZenWhileSharingScreen = Defaults.DefaultValue.autoZenWhileSharingScreen
         advanced.menuBarOrderFulfillmentTimeout = Defaults.DefaultValue.menuBarOrderFulfillmentTimeout
         advanced.enableDiagnosticLogging = Defaults.DefaultValue.enableDiagnosticLogging
         advanced.enableMenuBarItemOverflow = Defaults.DefaultValue.enableMenuBarItemOverflow
-        advanced.enableExperimentalSystemItemHiding = Defaults.DefaultValue.enableExperimentalSystemItemHiding
         advanced.enableExperimentalOverflowPrevention = Defaults.DefaultValue.enableExperimentalOverflowPrevention
         advanced.alwaysUseAppIconForMenuBarItems = Defaults.DefaultValue.alwaysUseAppIconForMenuBarItems
         advanced.enableMenuBarItemDescenders = Defaults.DefaultValue.enableMenuBarItemDescenders
@@ -80,6 +78,7 @@ extension AppSettings {
         advanced.fetchReleaseNotes = Defaults.DefaultValue.fetchReleaseNotes
         advanced.enableNativeAppHiding = Defaults.DefaultValue.enableNativeAppHiding
         advanced.enableModuleStandIns = Defaults.DefaultValue.enableModuleStandIns
+        advanced.skippedModuleStandIns = Set(Defaults.DefaultValue.skippedModuleStandIns)
         advanced.enableTimeMachineTakeover = Defaults.DefaultValue.enableTimeMachineTakeover
         advanced.enableTimerTakeover = Defaults.DefaultValue.enableTimerTakeover
         advanced.enableTextInputTakeover = Defaults.DefaultValue.enableTextInputTakeover
@@ -88,12 +87,6 @@ extension AppSettings {
         advanced.zenModeWhileRecording = Defaults.DefaultValue.zenModeWhileRecording
         advanced.recordingWatchScreen = Defaults.DefaultValue.recordingWatchScreen
         advanced.enableDesktopMenuHiding = Defaults.DefaultValue.enableDesktopMenuHiding
-        advanced.searchSectionOrder = AdvancedSettings.sanitizedSearchSectionOrder(
-            from: Defaults.DefaultValue.searchSectionOrder
-        )
-        advanced.searchIncludeVisible = Defaults.DefaultValue.searchIncludeVisible
-        advanced.searchIncludeHidden = Defaults.DefaultValue.searchIncludeHidden
-        advanced.searchIncludeAlwaysHidden = Defaults.DefaultValue.searchIncludeAlwaysHidden
         advanced.menuBarSearchPresentation = Defaults.DefaultValue.menuBarSearchPresentation
     }
 
@@ -110,5 +103,7 @@ extension AppSettings {
         displaySettings.confirmSpacingRelaunch = Defaults.DefaultValue.confirmSpacingRelaunch
         displaySettings.unconfirmedSpacingProfileScope = Defaults.DefaultValue.unconfirmedSpacingProfileScope
         displaySettings.spacingApplyMode = Defaults.DefaultValue.spacingApplyMode
+        displaySettings.wideDisplayRule.isEnabled = Defaults.DefaultValue.showEveryItemOnWideDisplays
+        displaySettings.wideDisplayRule.minimumWidth = Defaults.DefaultValue.wideDisplayMinimumWidth
     }
 }

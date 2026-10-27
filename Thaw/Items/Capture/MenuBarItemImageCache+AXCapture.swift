@@ -43,10 +43,15 @@ extension MenuBarItemImageCache {
         // Staged, not applied: the ledger is read-only until the pass commits.
         result.forgivenTags = forgivenTags
         let candidates = eligibleAXCaptureCandidates(
-            itemsWithBounds, band: band, overflowBounds: overflowBounds, into: &result
+            itemsWithBounds, band: band, overflowBounds: overflowBounds, screens: reader.displayBounds(), into: &result
         )
         guard !candidates.isEmpty else {
-            Self.diagLog.debug("axBoundsCapture: no trustworthy status-item bounds; skipping screenshot")
+            // Says which test failed: no app-menu edge refuses every icon, a stale edge refuses those left of it.
+            Self.diagLog.debug(
+                "axBoundsCapture: no trustworthy status-item bounds; skipping screenshot " +
+                    "(menuMaxX=\(band.menuMaxX.map { "\($0)" } ?? "nil"), band=\(band.frame), items=" +
+                    itemsWithBounds.map { "\($0.item.logString)@\($0.bounds)" }.joined(separator: ", ") + ")"
+            )
             return result
         }
         var context = AXCropContext(
@@ -84,13 +89,14 @@ extension MenuBarItemImageCache {
         _ candidates: [(item: MenuBarItem, bounds: CGRect)],
         band: (frame: CGRect, menuMaxX: CGFloat?),
         overflowBounds: [CGRect],
+        screens: [CGRect],
         into result: inout CapturePass
     ) -> [(item: MenuBarItem, bounds: CGRect)] {
         let peers = candidates.map(\.item)
         return candidates.filter { item, bounds in
             // Parked/overlapping frames cannot identify this item's pixels.
             // Skip without invalidating the glyph captured while it was seated.
-            if Self.hasUnusableCaptureGeometry(item, among: peers) {
+            if Self.hasUnusableCaptureGeometry(item, among: peers, screens: screens) {
                 Self.diagLog.debug("axBoundsCapture: \(item.logString) frame is parked or phantom; keeping its prior capture")
                 return false
             }

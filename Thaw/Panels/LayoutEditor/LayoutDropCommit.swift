@@ -18,6 +18,9 @@ enum LayoutDropCommit {
         let target: MenuBarSection.Name
         let previousTargetOrder: [MenuBarItem]
         let targetOrder: [MenuBarItem]
+        /// Several separate items that land in targetOrder. Without it, several items are a group,
+        /// which lands in the target's stored order.
+        var isBatch = false
     }
 
     /// Posts the reason and returns true when the drop cannot be carried out.
@@ -27,7 +30,7 @@ enum LayoutDropCommit {
             appState.layoutFeedback.post(
                 LayoutBarFeedbackCenter.Refusal(
                     title: String(
-                        localized: "“\(Constants.displayName)” couldn’t move to \(MenuBarSection.Name.visible.displayString)",
+                        localized: "“\(Constants.displayName)” couldn’t move to \(MenuBarSection.Name.visible.localizedName)",
                         comment: "Title shown when the Thaw control icon is dropped outside the Visible section"
                     ),
                     message: String(

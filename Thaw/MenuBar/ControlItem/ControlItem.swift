@@ -60,7 +60,7 @@ final class ControlItem: NSObject {
 
     /// Pending re-check for a persistent off-band frame. See noteDegenerateFrame().
     private var offBandRecoveryTask: Task<Void, Never>?
-    private var lastOffBandEscalation = Date.distantPast
+    private var lastOffBandEscalation: ContinuousClock.Instant?
     private var offBandRecoveryLevel = 0
     private var offBandRecoveryCycle = 0
     private var offBandRecoveryExhausted = false
@@ -106,6 +106,8 @@ final class ControlItem: NSObject {
     }
 
     private var cancellables = Set<AnyCancellable>()
+    /// Outlives a re-publish, which rebuilds cancellables.
+    private var displayInvalidation: AnyCancellable?
 
     /// Tasks backing the settings-observation reactions in
     /// observeSettings(appState:). GeneralSettings and
@@ -132,11 +134,12 @@ final class ControlItem: NSObject {
 
     /// Attaches the control item to the app and starts observing everything its
     /// appearance depends on.
-    func performSetup(with appState: AppState) {
+    func performSetup(with appState: AppState, displayInvalidations: some Publisher<Void, Never>) {
         self.appState = appState
         configuration = appState.settings
         menuController = ControlItemMenuController(appState: appState)
         beginObserving()
+        observeDisplayInvalidations(displayInvalidations)
     }
 }
 
@@ -371,13 +374,6 @@ extension ControlItem {
     /// re-arming bounds the churn to one re-register per cooldown.
     static nonisolated let republishRearmCooldown: Duration = .seconds(60)
 
-    /// Re-publishes spent per identifier this session. See
-    /// republishIfUnseated().
-    private static var republishCounts: [Identifier: Int] = [:]
-
-    /// When each identifier last re-published. Feeds the re-arm cooldown.
-    private static var republishLastAttempt: [Identifier: ContinuousClock.Instant] = [:]
-
     /// The decision for one unseated-window event. Pure, so the budget rule is
     /// testable without AppKit.
     static nonisolated func republishDecision(
@@ -402,11 +398,10 @@ extension ControlItem {
     @discardableResult
     func republishIfUnseated() -> RepublishDecision {
         let now = ContinuousClock.now
-        let priorCount = Self.republishCounts[identifier, default: 0]
-        let elapsedSinceLastAttempt = Self.republishLastAttempt[identifier].map { now - $0 }
+        let priorCount = ControlItemRepublishBudget.attempts(by: identifier)
         let decision = Self.republishDecision(
             priorCount: priorCount,
-            elapsedSinceLastAttempt: elapsedSinceLastAttempt
+            elapsedSinceLastAttempt: ControlItemRepublishBudget.elapsedSinceLastAttempt(by: identifier, now: now)
         )
         guard case let .republish(attempt) = decision else {
             diagLog.error(
@@ -419,8 +414,7 @@ extension ControlItem {
                 "republish budget for \(identifier.rawValue) re-armed; the parked item gets another re-register"
             )
         }
-        Self.republishCounts[identifier] = attempt
-        Self.republishLastAttempt[identifier] = now
+        ControlItemRepublishBudget.record(attempt: attempt, by: identifier, at: now)
 
         let oldWindowNumber = statusItem.button?.window?.windowNumber ?? -1
         cancellables.forEach { $0.cancel() }
@@ -498,8 +492,12 @@ extension ControlItem {
         return block
     }
 
+    private func needsOffBandRecovery(_ frame: CGRect) -> Bool {
+        OffBandRecoveryRule.needsRecovery(frame, isThawIcon: identifier == .visible, showsIcon: configuration.showThawIcon)
+    }
+
     /// How long a rung has to prove itself before the next one fires.
-    static nonisolated let offBandEscalationCooldown: TimeInterval = 5
+    static nonisolated let offBandEscalationCooldown: Duration = .seconds(5)
 
     /// Called from the geometry stream for every degenerate frame. Rearms a
     /// delayed re-check that escalates one rung per cooldown while the live
@@ -518,9 +516,9 @@ extension ControlItem {
     private func escalateIfStillOffBand() {
         // A missing window is not health: an item that is added and has none counts as off-band.
         let frame = window?.frame ?? (isAddedToMenuBar ? CGRect.zero : nil)
-        guard let frame, Self.isDegenerateMenuBarFrame(frame) else { return }
-        let now = Date.now
-        guard now.timeIntervalSince(lastOffBandEscalation) >= Self.offBandEscalationCooldown else {
+        guard let frame, needsOffBandRecovery(frame) else { return }
+        let now = ContinuousClock.now
+        if let last = lastOffBandEscalation, last.duration(to: now) < Self.offBandEscalationCooldown {
             noteDegenerateFrame()
             return
         }
@@ -599,11 +597,9 @@ extension ControlItem {
             scheduleRepublishRearmRetry()
             return
         }
-        guard Self.isDegenerateMenuBarFrame(frame) else {
-            // Seated again; give the ladder its budget back.
-            offBandRecoveryExhausted = false
-            offBandRecoveryLevel = 0
-            offBandRecoveryCycle = 0
+        guard needsOffBandRecovery(frame) else {
+            // Seated again, or collapsed on purpose; give the ladder its budget back.
+            restoreOffBandLadder()
             placementBlock = nil
             return
         }
@@ -616,19 +612,24 @@ extension ControlItem {
         case .republish:
             // A fresh window is out; give the host the escalation cooldown
             // to seat it before judging the frame again.
-            lastOffBandEscalation = Date.now
+            lastOffBandEscalation = .now
         case .exhausted:
             break
         }
         scheduleRepublishRearmRetry()
     }
 
+    /// Gives the escalation ladder its full budget again.
+    private func restoreOffBandLadder() {
+        offBandRecoveryExhausted = false
+        offBandRecoveryLevel = 0
+        offBandRecoveryCycle = 0
+    }
+
     /// Restores the re-publish budget after a window the host seated, so the
     /// next unseat starts with a fresh budget.
     func markSeated() {
-        guard Self.republishCounts[identifier] != nil else { return }
-        Self.republishCounts[identifier] = nil
-        Self.republishLastAttempt[identifier] = nil
+        guard ControlItemRepublishBudget.restore(for: identifier) else { return }
         diagLog.debug("republish budget for \(identifier.rawValue) restored; the fresh window seated")
     }
 
@@ -638,7 +639,7 @@ extension ControlItem {
     /// leaving rebuilds the bar, so the ladder gets a fresh attempt instead of
     /// staying latched off for the session.
     func resetOffBandRecovery() {
-        let spentRepublish = Self.republishCounts[identifier] != nil
+        let spentRepublish = ControlItemRepublishBudget.attempts(by: identifier) > 0
         guard offBandRecoveryExhausted || offBandRecoveryCycle > 0 || spentRepublish else {
             return
         }
@@ -646,12 +647,16 @@ extension ControlItem {
         offBandRecoveryLevel = 0
         offBandRecoveryCycle = 0
         placementBlock = nil
-        Self.republishCounts[identifier] = nil
-        Self.republishLastAttempt[identifier] = nil
+        ControlItemRepublishBudget.restore(for: identifier)
         diagLog.notice(
             "off-band recovery budget reset; the display configuration changed"
         )
         noteDegenerateFrame()
+    }
+
+    /// A spent ladder was measured against one bar geometry, so each display invalidation lets it retry.
+    func observeDisplayInvalidations(_ invalidations: some Publisher<Void, Never>) {
+        displayInvalidation = invalidations.sink { [weak self] in self?.resetOffBandRecovery() }
     }
 }
 
@@ -690,35 +695,26 @@ extension ControlItem {
             }
             .store(in: &cancellables)
 
-        // A spent off-band ladder was measured against one bar geometry; a
-        // display change rebuilds the bar, so let it retry.
-        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.resetOffBandRecovery()
-            }
-            .store(in: &cancellables)
-
         if let appState {
             observeSettings(appState: appState)
         }
     }
 
-    /// Feeds the published geometry from AppKit's KVO streams.
-    ///
-    /// These pipelines write straight into the @Published storage, so they
-    /// need no cancellable bookkeeping and cannot retain the control item. The
-    /// frame streams are debounced because a menu bar reflow walks the item
-    /// through a burst of intermediate positions, and consumers only care where
-    /// it lands.
+    /// Feeds the published geometry from AppKit's KVO streams. The pipelines
+    /// live in cancellables so a rebuild drops the old ones; kept for good they
+    /// would hold every replaced status item and window alive. Frames are
+    /// debounced because a reflow walks the item through intermediate positions.
     private func publishGeometry() {
         statusItem.publisher(for: \.button).removeNil()
-            .flatMap { $0.publisher(for: \.window) }
+            .map { $0.publisher(for: \.window) }
+            .switchToLatest()
             .receive(on: DispatchQueue.main)
-            .assign(to: &$window)
+            .sink { [weak self] in self?.window = $0 }
+            .store(in: &cancellables)
 
         $window.removeNil()
-            .flatMap { $0.publisher(for: \.frame) }
+            .map { $0.publisher(for: \.frame) }
+            .switchToLatest()
             .removeDuplicates()
             .debounce(for: 0.05, scheduler: DispatchQueue.main)
             .sink { [weak self] measuredFrame in
@@ -726,6 +722,8 @@ extension ControlItem {
                 // An item parked at x = -1, or measured with no size, has not
                 // landed in the bar; re-assert the icon instead of publishing it.
                 if Self.isDegenerateMenuBarFrame(measuredFrame) {
+                    // The icon the user turned off measures no width on purpose; nothing to recover.
+                    guard needsOffBandRecovery(measuredFrame) else { return }
                     // Every item measures {0, 0, 1, 0} until its first layout;
                     // only an item that had landed and lost its frame is news.
                     let message = "degenerate status window frame \(NSStringFromRect(measuredFrame))"
@@ -746,14 +744,17 @@ extension ControlItem {
             .store(in: &cancellables)
 
         $window.removeNil()
-            .flatMap { $0.publisher(for: \.screen) }
+            .map { $0.publisher(for: \.screen) }
+            .switchToLatest()
             .removeNil()
-            .flatMap { $0.publisher(for: \.frame) }
+            .map { $0.publisher(for: \.frame) }
+            .switchToLatest()
             .combineLatest($frame.removeNil())
             .removeDuplicates()
             .debounce(for: 0.05, scheduler: DispatchQueue.main)
             .map { screenFrame, frame in screenFrame.intersects(frame) ? frame : nil }
-            .assign(to: &$onScreenFrame)
+            .sink { [weak self] in self?.onScreenFrame = $0 }
+            .store(in: &cancellables)
     }
 
     /// Whether a measured frame means the item never landed; judged by the screens, as a display left of the main one has negative x.
@@ -847,7 +848,9 @@ extension ControlItem {
             let advancedSettings = appState.settings.advanced
             sectionDividerStyleObservationTask?.cancel()
             sectionDividerStyleObservationTask = Task { @MainActor [weak self] in
-                let changes = Observations { advancedSettings.sectionDividerStyle }
+                let changes = Observations {
+                    (advancedSettings.sectionDividerStyle, advancedSettings.customSectionDividerImage, advancedSettings.customSectionDividerIsTemplate)
+                }
                 for await _ in changes {
                     guard let self else { return }
                     updateStatusItem()
@@ -920,13 +923,17 @@ extension ControlItem {
 
         ControlItemDefaults.restoreVisibilityIfNeeded(autosaveName: identifier.rawValue)
         addToMenuBar()
-        expandStatusItem()
+        button.isHighlighted = false
+        show(iconImage(appState: appState), in: button)
+    }
 
+    /// Sizes the item to its content and draws image in an enabled button.
+    private func show(_ image: NSImage?, in button: NSStatusBarButton) {
+        expandStatusItem()
         button.isEnabled = true
         button.alphaValue = 1
         button.appearsDisabled = false
-        button.isHighlighted = false
-        button.image = iconImage(appState: appState)
+        button.image = image
     }
 
     /// The icon image for the current hiding state.
@@ -958,9 +965,11 @@ extension ControlItem {
         case .visible: false
         }
 
+        let image: NSImage?
         switch Self.sectionDividerPresentation(
             state: isRevealed ? .showSection : .hideSection,
-            style: configuration.sectionDividerStyle
+            style: configuration.sectionDividerStyle,
+            customMark: configuration.customSectionDividerMark
         ) {
         case .hidden:
             if button.image != nil {
@@ -968,11 +977,11 @@ extension ControlItem {
             }
             button.isEnabled = true
             button.alphaValue = 1
-            // A drag reveals every section, and the user still needs to see
-            // where one ends and the next begins, so a dragged-over divider
-            // keeps a sliver of width and draws a "|" in it.
-            let keepsSliver = configuration.showAllSectionsOnUserDrag
-                && appState.isDraggingMenuBarItem
+            let keepsSliver = Self.keepsDragSliver(
+                showAllSectionsOnUserDrag: configuration.showAllSectionsOnUserDrag,
+                isDragging: appState.isDraggingMenuBarItem,
+                revealedSection: revealed
+            )
             collapseStatusItem(toWidth: keepsSliver ? 3 : 0)
             button.appearsDisabled = true
             button.isHighlighted = false
@@ -980,13 +989,15 @@ extension ControlItem {
             if keepsSliver {
                 button.title = "|"
             }
-        case .chevron:
-            expandStatusItem()
-            button.isEnabled = true
-            button.alphaValue = 1
-            button.appearsDisabled = false
-            button.image = ControlItemImage.builtin(.chevronSmall).nsImage(for: appState)
+            return
+        case let .shown(builtin):
+            image = ControlItemImage.builtin(builtin).nsImage(for: appState)
+        case let .custom(mark):
+            // Saved data that no longer decodes draws the chevron, so the divider stays findable.
+            image = ControlItemImage.dividerImage(for: mark)
+                ?? ControlItemImage.builtin(.chevronSmall).nsImage(for: appState)
         }
+        show(image, in: button)
     }
 
     /// Expands the status item so it sizes itself to its own content.
@@ -1050,12 +1061,22 @@ extension ControlItem {
         if lastAppliedThawIconDisplayed == shouldShow, isAddedToMenuBar {
             return
         }
+        let wasTurnedOff = lastAppliedThawIconDisplayed == false
         lastAppliedThawIconDisplayed = shouldShow
 
         if shouldShow {
             updateStatusItem()
+            // The icon the user turns back on gets checked again, in case it doesn't land.
+            if wasTurnedOff {
+                noteDegenerateFrame()
+            }
         } else {
             collapseStatusItem()
+            // Nothing is off-band about an icon the user turned off, so the
+            // ladder starts over with its full budget if it is turned back on.
+            offBandRecoveryTask?.cancel()
+            offBandRecoveryTask = nil
+            restoreOffBandLadder()
         }
     }
 
@@ -1260,10 +1281,8 @@ extension ControlItem {
             // inline on the pressing queue. NSApp.currentEvent is main-thread
             // event state and is nil for AX-initiated presses anyway, so this
             // path only needs the hop, not the event.
-            DispatchQueue.main.async { [weak self] in
-                MainActor.assumeIsolated {
-                    self?.performActionOnMain()
-                }
+            Task { @MainActor [weak self] in
+                self?.performActionOnMain()
             }
         }
     }

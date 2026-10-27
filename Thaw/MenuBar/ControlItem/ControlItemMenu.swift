@@ -168,7 +168,7 @@ final class ControlItemMenuController: NSObject {
             let title = Self.sectionToggleTitle(for: section, name: name)
             let item = NSMenuItem(
                 title: title,
-                action: #selector(toggleMenuBarSection),
+                action: section.isToggleEnabled ? #selector(toggleMenuBarSection) : nil,
                 keyEquivalent: ""
             )
             // The count is a badge so the title stays a fixed string for translators.
@@ -197,7 +197,7 @@ final class ControlItemMenuController: NSObject {
         case (false, .alwaysHidden):
             String(localized: "Hide Always Hidden Items")
         default:
-            String(localized: "\(section.isHidden ? "Show" : "Hide") \(name.displayString) Items")
+            String(localized: "\(section.isHidden ? "Show" : "Hide") \(name.localizedName) Items")
         }
     }
 

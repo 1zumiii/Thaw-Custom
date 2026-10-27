@@ -35,12 +35,12 @@ final class SwapBarManager {
         advancedSettings?.enableSwapBar ?? false
     }
 
-    func performSetup(with appState: AppState) {
+    func performSetup(with appState: AppState, displaySettlements: some Publisher<EnvironmentChange, Never>) {
         self.appState = appState
         advancedSettings = appState.settings.advanced
         cancellables = [
             observeSettingFlips(),
-            observeDisplayChanges(),
+            observeDisplayChanges(displaySettlements),
         ]
     }
 
@@ -53,21 +53,14 @@ final class SwapBarManager {
         }
     }
 
-    /// A display or Space change moves the bottom edge; re-place rather than
-    /// trust the old frame.
-    private func observeDisplayChanges() -> AnyCancellable {
-        let cancellable = Publishers.Merge(
-            NSWorkspace.shared.notificationCenter.publisher(
-                for: NSWorkspace.activeSpaceDidChangeNotification
-            ),
-            NotificationCenter.default.publisher(
-                for: NSApplication.didChangeScreenParametersNotification
-            )
-        )
-        .sink { [weak self] _ in
-            self?.currentDisplayID = nil
-            self?.reposition()
-        }
+    /// A Space change or a settled display change moves the bottom edge;
+    /// re-place rather than trust the old frame.
+    private func observeDisplayChanges(_ settlements: some Publisher<EnvironmentChange, Never>) -> AnyCancellable {
+        let cancellable = DisplayEnvironment.spaceOrDisplayChanges(merging: settlements.map { _ in () })
+            .sink { [weak self] in
+                self?.currentDisplayID = nil
+                self?.reposition()
+            }
         return AnyCancellable { cancellable.cancel() }
     }
 
@@ -313,12 +306,7 @@ struct SwapBarView: View {
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
-        // A tinted fill, not a second glass layer: glass on glass refracts.
-        .background {
-            if isOn {
-                Capsule(style: .continuous).fill(Color.accentColor.opacity(0.18))
-            }
-        }
+        .thawSelectedFill(isOn, in: Capsule(style: .continuous))
         .thawSelectionCue(isSelected: isOn, in: Capsule(style: .continuous))
         .thawHoverLift()
         .help("Swap the shown and hidden menu bar items")
@@ -384,7 +372,7 @@ struct SwapBarView: View {
         return SwapBarButton(symbol: symbol, label: label, isOn: isShown) {
             section?.toggle()
         }
-        .disabled(section?.isEnabled != true)
+        .disabled(section?.isToggleEnabled != true)
     }
 
     private var zenToggle: some View {
@@ -432,11 +420,7 @@ private struct SwapBarButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .background {
-            if isOn {
-                Circle().fill(Color.accentColor.opacity(0.18))
-            }
-        }
+        .thawSelectedFill(isOn, in: Circle())
         // Under Differentiate Without Color the tinted well alone is not a
         // mark; the cue rings the toggle and sets the selected trait.
         .thawSelectionCue(isSelected: isOn, in: Circle())

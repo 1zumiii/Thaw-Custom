@@ -28,101 +28,23 @@ struct ToolsSettingsPane: View {
     // The browser below reloads on this rather than watching the folder,
     // because a reset is the only thing on this pane that writes a backup.
     @State private var backupsRefreshToken = 0
+    @State private var tab = TroubleshootingTab.diagnostics
 
     var body: some View {
         ThawForm {
-            // Everyday utilities first, then the ones that delete or reset
-            // something, with a reset of everything last. What the app
-            // observes lives on the Privacy pane, beside the permissions that
-            // allow it.
-            ThawSection("Onboarding") {
-                toolRow(
-                    title: "Welcome screens",
-                    detail: "Show the welcome, access, and setup screens again.",
-                    buttonTitle: "Show Again"
-                ) {
-                    appState.replayOnboarding()
-                }
-            }
-
-            // Non-destructive, but a level down from daily use.
-            ThawSection("Diagnostics") {
-                diagnosticLogging
-            }
-            // The move record is the log's live view, so it shows only while
-            // the log is being written.
-            if settings.enableDiagnosticLogging {
-                MoveInspectorSection()
-            }
-
-            // Above Troubleshooting because the positions reset there writes
-            // the backups this lists, and its copy points up to it.
-            MenuBarLayoutBackupsSection(refreshToken: backupsRefreshToken)
-
-            // These delete preferences, clear the cache, or quit apps.
-            ThawSection("Troubleshooting") {
-                toolRow(
-                    title: "Missing menu bar items",
-                    detail: "Restore app visibility without resetting your layout. Normal hiding stops while a separate recovery window is open.",
-                    buttonTitle: "Restore Missing Items…"
-                ) {
-                    confirmsVisibilityRecovery = true
-                }
-
-                toolRow(
-                    title: "Control Center preferences",
-                    detail: "Quit Control Center and delete its preference files so the state of Apple's menu bar items can rebuild.",
-                    buttonTitle: "Reset Control Center…",
-                    role: .destructive,
-                    statusFor: .resetControlCenter
-                ) {
-                    pendingAction = .resetControlCenter
-                }
-
-                // Saved positions live in the menu bar's own domain, not
-                // Control Center's, so the row above does not clear them and
-                // this one is a separate reset rather than a duplicate.
-                toolRow(
-                    title: "Saved item positions",
-                    detail: "Delete macOS's saved menu bar layout and restart the menu bar so it rebuilds from scratch. Use this when items won't come back to the menu bar after you move them. A backup is saved first; restore it from Layout backups above.",
-                    buttonTitle: "Reset Positions…",
-                    role: .destructive,
-                    statusFor: .resetMenuBarLayoutPositions
-                ) {
-                    pendingAction = .resetMenuBarLayoutPositions
-                }
-
-                toolRow(
-                    title: "Cache",
-                    detail: "Delete \(Constants.displayName)'s cache folder, then quit the app.",
-                    buttonTitle: "Quit and Clear Cache…",
-                    role: .destructive,
-                    statusFor: .quitAndClearCache
-                ) {
-                    pendingAction = .quitAndClearCache
-                }
-
-                toolRow(
-                    title: "Permissions",
-                    detail: "Clear Accessibility and Screen Recording decisions for \(Constants.displayName), then quit so you can grant them again on next launch.",
-                    buttonTitle: "Reset Permissions…",
-                    role: .destructive,
-                    statusFor: .resetPermissions
-                ) {
-                    pendingAction = .resetPermissions
-                }
-            }
-
-            ThawSection("Reset") {
-                toolRow(
-                    title: "All settings",
-                    detail: "Restore \(Constants.displayName) settings to their defaults. Saved profiles, allowed apps, and user data are not deleted. This cannot be undone.",
-                    buttonTitle: "Reset \(Constants.displayName)…",
-                    role: .destructive,
-                    statusFor: .resetSettings
-                ) {
-                    pendingAction = .resetSettings
-                }
+            // Diagnostics first, then tools that delete or reset something, with a full reset last.
+            SettingsPaneTabs(
+                selection: $tab,
+                tabs: TroubleshootingTab.allCases,
+                tabForSection: TroubleshootingTab.init(section:)
+            )
+            switch tab {
+            case .diagnostics:
+                diagnosticsTab
+            case .repair:
+                repairTab
+            case .reset:
+                resetTab
             }
         }
         .disabled(isBusy)
@@ -163,6 +85,79 @@ struct ToolsSettingsPane: View {
             Text("Thaw will quit normal mode so neither hiding mechanism can interfere. Your saved layout is kept. Native hiding will remain off after recovery.")
         }
         .errorAlert(failedAction?.errorTitle ?? "Couldn’t run tool", message: $errorMessage, role: .cancel)
+    }
+
+    // MARK: Tabs
+
+    @ViewBuilder
+    private var diagnosticsTab: some View {
+        ThawSection("Diagnostics") {
+            diagnosticLogging
+        }
+        // The move record is the log's live view, so it shows only while
+        // the log is being written.
+        if settings.enableDiagnosticLogging {
+            MoveInspectorSection()
+        }
+    }
+
+    /// These delete preferences or quit apps. The positions reset writes the
+    /// backups listed below them, and its text points down to them.
+    @ViewBuilder
+    private var repairTab: some View {
+        ThawSection("Repair") {
+            toolRow(
+                title: "Missing menu bar items",
+                detail: "Restore app visibility without resetting your layout. Normal hiding stops while a separate recovery window is open.",
+                buttonTitle: "Restore Missing Items…"
+            ) {
+                confirmsVisibilityRecovery = true
+            }
+
+            toolRow(
+                title: "Menu bar",
+                detail: "Restart the menu bar when it gets stuck, for example when it stays on top of full-screen apps. Your layout is kept, and \(Constants.displayName) relaunches afterward.",
+                buttonTitle: "Restart Menu Bar…",
+                statusFor: .restartMenuBar
+            ) {
+                pendingAction = .restartMenuBar
+            }
+
+            toolRow(
+                title: "Saved item positions",
+                detail: "Delete macOS's saved menu bar layout and restart the menu bar so it rebuilds from scratch. Use this when items won't come back to the menu bar after you move them. A backup is saved first; restore it from Layout backups below.",
+                buttonTitle: "Reset Positions…",
+                role: .destructive,
+                statusFor: .resetMenuBarLayoutPositions
+            ) {
+                pendingAction = .resetMenuBarLayoutPositions
+            }
+
+            toolRow(
+                title: "Permissions",
+                detail: "Clear Accessibility and Screen Recording decisions for \(Constants.displayName), then quit so you can grant them again on next launch.",
+                buttonTitle: "Reset Permissions…",
+                role: .destructive,
+                statusFor: .resetPermissions
+            ) {
+                pendingAction = .resetPermissions
+            }
+        }
+        MenuBarLayoutBackupsSection(refreshToken: backupsRefreshToken)
+    }
+
+    private var resetTab: some View {
+        ThawSection("Reset") {
+            toolRow(
+                title: "All settings",
+                detail: "Restore \(Constants.displayName) settings to their defaults. Saved profiles, allowed apps, and user data are not deleted. This cannot be undone.",
+                buttonTitle: "Reset \(Constants.displayName)…",
+                role: .destructive,
+                statusFor: .resetSettings
+            ) {
+                pendingAction = .resetSettings
+            }
+        }
     }
 
     private var diagnosticLogging: some View {
@@ -229,7 +224,7 @@ struct ToolsSettingsPane: View {
         statusAction = action
         defer { isBusy = false }
 
-        if action == .resetControlCenter || action == .resetMenuBarLayoutPositions {
+        if action == .resetMenuBarLayoutPositions || action == .restartMenuBar {
             // Killing the host mid-move strands the move's events.
             await appState.itemManager.moveActivity.waitUntilIdle()
         }
@@ -239,9 +234,6 @@ struct ToolsSettingsPane: View {
             case .resetSettings:
                 appState.settings.resetAllSettingsToDefaults()
                 reportSuccess(String(localized: "Settings were reset to defaults."))
-            case .resetControlCenter:
-                try await MaintenanceTools.resetControlCenterPreferences()
-                reportSuccess(String(localized: "Control Center preferences were reset."))
             case .resetMenuBarLayoutPositions:
                 let backup = try await MaintenanceTools.resetMenuBarLayoutPositions()
                 appState.itemManager.forgetStrandedRepairs()
@@ -262,16 +254,11 @@ struct ToolsSettingsPane: View {
                     try? await Task.sleep(for: .milliseconds(500))
                 }
                 appState.restartSelf()
-            case .quitAndClearCache:
-                await appState.imageCache.suspendDiskPersistenceForReset()
-                do {
-                    try MaintenanceTools.clearAppCache()
-                } catch {
-                    appState.imageCache.resumeDiskPersistenceAfterFailedReset()
-                    throw error
-                }
-                reportSuccess(String(localized: "Cache cleared. Quitting…"))
-                ApplicationTermination.request()
+            case .restartMenuBar:
+                try await MaintenanceTools.restartMenuBar()
+                reportSuccess(String(localized: "The menu bar was restarted. Relaunching…"))
+                // Thaw's hiding and positions sessions ended with the old host.
+                appState.restartSelf()
             case .resetPermissions:
                 try await MaintenanceTools.resetAppPermissions()
                 reportSuccess(String(localized: "Permissions cleared. Quitting…"))
@@ -291,9 +278,8 @@ struct ToolsSettingsPane: View {
 
 private enum MaintenanceToolAction: Identifiable {
     case resetSettings
-    case resetControlCenter
     case resetMenuBarLayoutPositions
-    case quitAndClearCache
+    case restartMenuBar
     case resetPermissions
 
     var id: Self {
@@ -303,9 +289,8 @@ private enum MaintenanceToolAction: Identifiable {
     var confirmationTitle: String {
         switch self {
         case .resetSettings: String(localized: "Reset all settings?")
-        case .resetControlCenter: String(localized: "Reset Control Center preferences?")
         case .resetMenuBarLayoutPositions: String(localized: "Reset saved item positions?")
-        case .quitAndClearCache: String(localized: "Quit and clear cache?")
+        case .restartMenuBar: String(localized: "Restart the menu bar?")
         case .resetPermissions: String(localized: "Reset permissions?")
         }
     }
@@ -313,9 +298,8 @@ private enum MaintenanceToolAction: Identifiable {
     var errorTitle: LocalizedStringKey {
         switch self {
         case .resetSettings: "Couldn’t reset settings"
-        case .resetControlCenter: "Couldn’t reset Control Center"
         case .resetMenuBarLayoutPositions: "Couldn’t reset saved item positions"
-        case .quitAndClearCache: "Couldn’t clear the cache"
+        case .restartMenuBar: "Couldn’t restart the menu bar"
         case .resetPermissions: "Couldn’t reset permissions"
         }
     }
@@ -323,9 +307,8 @@ private enum MaintenanceToolAction: Identifiable {
     var confirmationButtonTitle: LocalizedStringKey {
         switch self {
         case .resetSettings: "Reset"
-        case .resetControlCenter: "Reset Control Center"
         case .resetMenuBarLayoutPositions: "Reset Positions"
-        case .quitAndClearCache: "Quit and Clear Cache"
+        case .restartMenuBar: "Restart Menu Bar"
         case .resetPermissions: "Reset Permissions"
         }
     }
@@ -334,14 +317,44 @@ private enum MaintenanceToolAction: Identifiable {
         switch self {
         case .resetSettings:
             "This will reset app settings to their default values. Saved profiles, allowed apps, and user data will not be deleted. This action cannot be undone."
-        case .resetControlCenter:
-            "Control Center will quit and its preference files will be deleted. macOS usually relaunches it automatically."
         case .resetMenuBarLayoutPositions:
             "Every menu bar item's saved position will be deleted and the menu bar will restart, so your whole arrangement is rebuilt from scratch. A backup is saved first, and Layout backups on this page can put it back. \(Constants.displayName) relaunches afterward."
-        case .quitAndClearCache:
-            "\(Constants.displayName) will delete its cache folder and quit. Launch the app again afterward."
+        case .restartMenuBar:
+            "The menu bar will disappear for a moment and come back. Your layout is kept. \(Constants.displayName) relaunches afterward."
         case .resetPermissions:
             "Accessibility and Screen Recording permissions will be cleared for \(Constants.displayName). The app will quit so you can grant them again on next launch."
+        }
+    }
+}
+
+nonisolated enum TroubleshootingTab: CaseIterable, ThawTab {
+    case diagnostics
+    case repair
+    case reset
+
+    /// The tab holding a search result's section.
+    init?(section: String) {
+        switch section {
+        case "Diagnostics": self = .diagnostics
+        case "Repair": self = .repair
+        case "Reset": self = .reset
+        default: return nil
+        }
+    }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .diagnostics: "Diagnostics"
+        case .repair: "Repair"
+        case .reset: "Reset"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .diagnostics: "stethoscope"
+        case .repair: "wrench.and.screwdriver"
+        case .reset: "arrow.counterclockwise"
         }
     }
 }

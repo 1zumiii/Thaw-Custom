@@ -66,21 +66,21 @@ nonisolated extension SearchIndex {
             property: nil
         ),
         SearchEntry(
-            id: "displays.confirmSpacingRelaunch",
-            title: "Confirm before relaunching apps",
-            descriptionText: String(localized: "Before a display change or spacing edit relaunches your menu bar apps, \(Constants.displayName) asks you to confirm."),
+            id: "displays.spacingApplyMode",
+            title: "When spacing changes",
+            descriptionText: String(localized: "Choose whether a spacing change asks first, restarts menu bar apps right away, or waits until they restart."),
             pane: .displays,
             section: "Menu bar item spacing",
-            keywords: ["confirm", "relaunch", "apps", "spacing", "restart"],
+            keywords: ["spacing", "confirm", "relaunch", "restart", "apps", "without", "immediate", "next restart", "when applying spacing"],
             property: nil
         ),
         SearchEntry(
-            id: "displays.spacingApplyMode",
-            title: "When applying spacing",
-            descriptionText: String(localized: "Choose whether spacing changes restart menu bar apps immediately or wait until the next restart."),
+            id: "displays.wideDisplayRule",
+            title: "Show every item on wide displays",
+            descriptionText: String(localized: "Keeps hidden items in the menu bar while it is on a display at least the width you choose."),
             pane: .displays,
-            section: "Menu bar item spacing",
-            keywords: ["spacing", "relaunch", "restart", "apps", "disable", "without", "immediate", "next restart"],
+            section: "Wide displays",
+            keywords: ["wide", "large", "big", "external", "monitor", "screen size", "width", "show all", "every item"],
             property: nil
         ),
     ]

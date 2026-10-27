@@ -139,8 +139,7 @@ extension MenuBarItemManager {
             // still be "Item-0" right after creation.
             if MenuBarSpacerManager.isSpacerTag(candidate.tag)
                 || appState?.spacerManager.ownsWindowID(candidate.windowID) == true
-                || ThawBarOnlyProxies.isProxyTag(candidate.tag)
-                || appState?.thawBarOnlyProxies.ownsWindowID(candidate.windowID) == true
+                || (candidate.tag.isThawOwnedNamespace && candidate.tag.title.hasPrefix(GroupFolders.autosavePrefix))
                 || appState?.groupFolders.ownsWindowID(candidate.windowID) == true
             {
                 MenuBarItemManager.diagLog.info(
@@ -261,13 +260,6 @@ extension MenuBarItemManager {
         case explicitLayoutRepair
     }
 
-    static func activeDisplayBounds() -> [CGRect] {
-        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
-        return ids.prefix(Int(count)).map { CGDisplayBounds($0) }
-    }
-
     /// Keys for visible items with no AX child. Unmanaged, but they hold a
     /// visible slot so no divider sorts to their right. Never stale keys.
     @MainActor
@@ -278,12 +270,12 @@ extension MenuBarItemManager {
         PositionStoreItemSource.opaqueVisibleKeys(in: items)
     }
 
-    func freshestRecordedVisibleOrder(
-        controller: any MenuBarSectionControlling
-    ) -> [String] {
+    /// After a drag the mirror has not caught up with, the bar is the record and no order is returned.
+    func freshestRecordedVisibleOrder(controller: any MenuBarSectionControlling) -> [String] {
         ControlOrderRules.freshestRecordedVisibleOrder(
             mirroredOrder: savedSectionOrder[sectionKey(for: .visible)],
-            controllerOrder: controller.sectionItemOrder[.visible]
+            controllerOrder: controller.sectionItemOrder[.visible],
+            userDraggedSinceMirror: savedOrderMirrorGate.mirrorIsBehind(userDragEndedAt: lastUserMenuBarDragEnd)
         )
     }
 

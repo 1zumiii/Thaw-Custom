@@ -52,6 +52,7 @@ extension MenuBarItemManager {
         let maxDeadline = max(settlingDeadline ?? newMaxDeadline, newMaxDeadline)
         settlingDeadline = maxDeadline
         settlingExpectedBundleIDs = mergedExpected
+        let adoptsObservedMembership = Self.settleAdoptsObservedMembership(incoming: incomingKind, replacing: settlingKind)
         settlingKind = incomingKind
         // The cancelled task exits without touching shared state.
         startupSettlingTask?.cancel()
@@ -86,10 +87,13 @@ extension MenuBarItemManager {
 
                 await cacheItemsRegardless(skipRecentMoveCheck: true, resolveSourcePID: true)
                 let managedCount = itemCache.managedItems.count
-                let unresolved = itemCache.managedItems.count(where: { $0.sourcePID == nil })
+                let unresolved = SettlingSourcePIDs.unresolvedCount(in: itemCache.managedItems)
                 let pidsOK = managedCount > 0 && unresolved <= 1
                 let minimumElapsed = settlingStartedAt.duration(to: .now) >= Self.startupMinimumSettlingDuration
                 let hostReady = menuBarHostItemsReady(in: itemCache)
+                // After a display change macOS keeps re-laying the bar well past a
+                // stable item count, and a restore read from those frames scrambles it.
+                let barQuiet = !reason.hasPrefix("display") || savedOrderMirrorGate.isQuiet()
 
                 if useExpectedSet {
                     let presentBundleIDs: Set<String> = Set(
@@ -118,7 +122,8 @@ extension MenuBarItemManager {
                     if pidsOK,
                        managedCount == lastSeenCount,
                        minimumElapsed,
-                       hostReady
+                       hostReady,
+                       barQuiet
                     {
                         stablePolls += 1
                         if stablePolls >= stableTarget {
@@ -139,6 +144,10 @@ extension MenuBarItemManager {
                         } else if !hostReady {
                             MenuBarItemManager.diagLog.debug(
                                 "\(reason): waiting for menu bar host modules (MenuBarAgent / BentoBox)"
+                            )
+                        } else if !barQuiet {
+                            MenuBarItemManager.diagLog.debug(
+                                "\(reason): waiting for the bar to go quiet after the display change"
                             )
                         }
                         stablePolls = 0
@@ -172,7 +181,10 @@ extension MenuBarItemManager {
             )
             // A bar arranged by hand while Thaw was not running, or under an
             // older build, has to be read once before its sections can be.
-            adoptObservedMembership(reason: "settled launch")
+            // Only items with no section yet: Layout's sections win over stale weights.
+            if adoptsObservedMembership {
+                adoptObservedMembership(reason: "settled launch", keepingAuthored: true)
+            }
 
             // Once per launch, after login items register: hygiene asks
             // NSWorkspace which apps exist. Latched because profile applies
@@ -186,17 +198,7 @@ extension MenuBarItemManager {
                 }
             }
 
-            // The active display's profile, not savedSectionOrder, is the truth
-            // at launch. Await it so applySavedLayout below cannot race it.
-            if let appState = self.appState,
-               appState.profileManager.activeProfileID != nil
-            {
-                MenuBarItemManager.diagLog.info(
-                    "\(reason): applying active display profile after settling"
-                )
-                appState.profileManager.reapplyActiveProfile()
-                await appState.profileManager.layoutTask?.value
-            }
+            await settleActiveProfile(reason: reason)
 
             MenuBarItemManager.diagLog.debug(
                 "\(reason): running fast restore without sourcePID resolution"
@@ -218,6 +220,13 @@ extension MenuBarItemManager {
         }
     }
 
+    /// Whether a settling reads sections from the stored weights when it ends: only Thaw's own launch.
+    /// A concealed item's weight can still sit in the Visible band in Manual, so a later read would undo Layout edits.
+    /// An app relaunch that takes over the launch settling still owes that read.
+    static func settleAdoptsObservedMembership(incoming: SettlingKind, replacing existing: SettlingKind?) -> Bool {
+        incoming == .cold || existing == .cold
+    }
+
     static func settlingYields(incoming: SettlingKind, to existing: SettlingKind) -> Bool {
         switch incoming {
         case .preflight: existing != .preflight
@@ -227,8 +236,10 @@ extension MenuBarItemManager {
     }
 
     /// Re-checks for status items that register after the cold-boot settling
-    /// window (already-running apps with late NSStatusItem attachment).
+    /// window (already-running apps with late NSStatusItem attachment), then
+    /// for login items that add theirs a minute or more after launch.
     private func scheduleStartupLateItemRecheck() {
+        LateLoginArrivals.schedule(for: self)
         Task { @MainActor [weak self] in
             // Many apps attach their status item 2–5 s after start, with no
             // launch notification since they were already running.
@@ -244,6 +255,24 @@ extension MenuBarItemManager {
     private func menuBarHostItemsReady(in cache: ItemCache) -> Bool {
         cache.managedItems.contains {
             $0.tag.namespace == .menuBarAgent || $0.tag.isBentoBox
+        }
+    }
+
+    /// Only a profile other than the one in place is applied, so drags made since survive. An apply started
+    /// here is awaited so applySavedLayout can't race it; one already running waits on this settle's task,
+    /// so awaiting it here would deadlock.
+    private func settleActiveProfile(reason: String) async {
+        guard let profiles = appState?.profileManager else { return }
+        switch ProfileSettleReapply.Record().settle(
+            activeProfileID: profiles.activeProfileID,
+            pendingApplyProfileID: profiles.pendingApplyProfileID
+        ) {
+        case .reapply:
+            MenuBarItemManager.diagLog.info("\(reason): applying active display profile after settling")
+            profiles.reapplyActiveProfile()
+            await profiles.layoutTask?.value
+        case .leavePendingApply, .keep:
+            break
         }
     }
 }

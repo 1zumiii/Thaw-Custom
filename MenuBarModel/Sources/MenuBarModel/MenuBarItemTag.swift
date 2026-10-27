@@ -431,8 +431,12 @@ public struct MenuBarItemTag: Hashable, CustomStringConvertible, Sendable, Codab
 
     /// System capture activity changes with ScreenCaptureKit sessions; it is
     /// not a user-arranged item and must not enter capture or order repair.
+    /// The screen-sharing indicator too: macOS keeps it where the user drops it, so it is no trailing anchor.
     public var isCaptureActivityIndicator: Bool {
-        (title == "AudioVideoModule" || title == "com.apple.menuextra.audiovideo") &&
+        if namespace == .screenCaptureUI {
+            return true
+        }
+        return (title == "AudioVideoModule" || title == "com.apple.menuextra.audiovideo") &&
             (namespace == .menuBarAgent || namespace == .controlCenter || namespace.isUUID)
     }
 
@@ -763,7 +767,6 @@ public extension MenuBarItemTag {
 
     /// Separate Apple/system agents that Thaw should display but not move.
     private static let fixedSystemAgentNamespaces: Set<Namespace> = [
-        .screenCaptureUI,
         .ssMenuAgent,
     ]
 

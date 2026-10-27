@@ -41,14 +41,34 @@ final class AdvancedSettings {
         }
     }
 
+    /// The image a Custom section divider draws, or nil before one is chosen.
+    var customSectionDividerImage: Data? {
+        didSet {
+            guard oldValue != customSectionDividerImage else { return }
+            if let customSectionDividerImage {
+                Defaults.set(customSectionDividerImage, forKey: .customSectionDividerImage)
+            } else {
+                Defaults.removeObject(forKey: .customSectionDividerImage)
+            }
+        }
+    }
+
+    var customSectionDividerIsTemplate = Defaults.DefaultValue.customSectionDividerIsTemplate {
+        didSet {
+            guard oldValue != customSectionDividerIsTemplate else { return }
+            Defaults.set(customSectionDividerIsTemplate, forKey: .customSectionDividerIsTemplate)
+        }
+    }
+
     /// Manual arrangement disables moves and position-table writes, but keeps hiding and revealing.
     var menuBarArrangementMode = Defaults.DefaultValue.menuBarArrangementMode {
         didSet {
             guard oldValue != menuBarArrangementMode else { return }
             Defaults.set(menuBarArrangementMode.rawValue, forKey: .menuBarArrangementMode)
             if menuBarArrangementMode == .manual {
-                // Manual membership follows where items already sit in the bar.
-                appState?.itemManager.scheduleObservedMembershipAdoption(reason: "switched to Manual")
+                // Switching to Manual keeps the sections set in Layout, since the stored
+                // weights of concealed items can be out of date.
+                appState?.itemManager.scheduleObservedMembershipAdoption(reason: "switched to Manual", keepingAuthored: true)
             }
         }
     }
@@ -95,15 +115,6 @@ final class AdvancedSettings {
         didSet {
             guard oldValue != iconRefreshInterval else { return }
             Defaults.set(iconRefreshInterval, forKey: .iconRefreshInterval)
-        }
-    }
-
-    /// Limits repeat reveals so animated icons cannot bounce items in and out of the bar.
-    /// The watcher reads this each capture batch, so changes need no restart.
-    var menuBarItemAlertRevealCooldown = Defaults.DefaultValue.menuBarItemAlertRevealCooldown {
-        didSet {
-            guard oldValue != menuBarItemAlertRevealCooldown else { return }
-            Defaults.set(menuBarItemAlertRevealCooldown, forKey: .menuBarItemAlertRevealCooldown)
         }
     }
 
@@ -199,10 +210,8 @@ final class AdvancedSettings {
     var enableNativeAppHiding = Defaults.DefaultValue.enableNativeAppHiding {
         didSet {
             guard oldValue != enableNativeAppHiding else { return }
-            if enableNativeAppHiding {
-                enableExperimentalSystemItemHiding = false
-            }
             Defaults.set(enableNativeAppHiding, forKey: .enableNativeAppHiding)
+            appState?.menuBarManager.sectionController.refresh()
         }
     }
 
@@ -212,6 +221,14 @@ final class AdvancedSettings {
         didSet {
             guard oldValue != enableModuleStandIns else { return }
             Defaults.set(enableModuleStandIns, forKey: .enableModuleStandIns)
+        }
+    }
+
+    /// The modules enableModuleStandIns leaves as Apple's own.
+    var skippedModuleStandIns: Set<String> = Set(Defaults.DefaultValue.skippedModuleStandIns) {
+        didSet {
+            guard oldValue != skippedModuleStandIns else { return }
+            Defaults.set(skippedModuleStandIns.sorted(), forKey: .skippedModuleStandIns)
         }
     }
 
@@ -285,19 +302,10 @@ final class AdvancedSettings {
         }
     }
 
-    /// Clock, Control Center, and Siri require the assertion that native hiding releases.
-    var enableExperimentalSystemItemHiding = Defaults.DefaultValue.enableExperimentalSystemItemHiding {
-        didSet {
-            if enableNativeAppHiding, enableExperimentalSystemItemHiding {
-                enableExperimentalSystemItemHiding = false
-                // A queued URI notification may follow a persisted write, even when the model was already false.
-                Defaults.set(false, forKey: .enableExperimentalSystemItemHiding)
-                return
-            }
-            guard oldValue != enableExperimentalSystemItemHiding else { return }
-            Defaults.set(enableExperimentalSystemItemHiding, forKey: .enableExperimentalSystemItemHiding)
-            appState?.menuBarManager.sectionController.refresh()
-        }
+    /// Clock, Control Center and Siri need the assertion native hiding releases, so this is on exactly when native hiding is off.
+    /// Derived, not stored: a value an older build saved under its Defaults key is never read.
+    var enableExperimentalSystemItemHiding: Bool {
+        HidingMethod(nativeAppHidingEnabled: enableNativeAppHiding).hidesAppleItems
     }
 
     /// Extreme hidden-item weights try to make native overflow collapse them first on macOS 27 notched displays.
@@ -324,37 +332,6 @@ final class AdvancedSettings {
         didSet {
             guard oldValue != menuBarOrderFulfillmentTimeout else { return }
             Defaults.set(menuBarOrderFulfillmentTimeout, forKey: .menuBarOrderFulfillmentTimeout)
-        }
-    }
-
-    /// The order in which menu bar sections appear in the search panel.
-    var searchSectionOrder: [MenuBarSection.Name] = Defaults.DefaultValue.searchSectionOrder
-        .compactMap(MenuBarSection.Name.init(rawValue:))
-    {
-        didSet {
-            guard oldValue != searchSectionOrder else { return }
-            Defaults.set(searchSectionOrder.map(\.rawValue), forKey: .searchSectionOrder)
-        }
-    }
-
-    var searchIncludeVisible = Defaults.DefaultValue.searchIncludeVisible {
-        didSet {
-            guard oldValue != searchIncludeVisible else { return }
-            Defaults.set(searchIncludeVisible, forKey: .searchIncludeVisible)
-        }
-    }
-
-    var searchIncludeHidden = Defaults.DefaultValue.searchIncludeHidden {
-        didSet {
-            guard oldValue != searchIncludeHidden else { return }
-            Defaults.set(searchIncludeHidden, forKey: .searchIncludeHidden)
-        }
-    }
-
-    var searchIncludeAlwaysHidden = Defaults.DefaultValue.searchIncludeAlwaysHidden {
-        didSet {
-            guard oldValue != searchIncludeAlwaysHidden else { return }
-            Defaults.set(searchIncludeAlwaysHidden, forKey: .searchIncludeAlwaysHidden)
         }
     }
 
@@ -388,12 +365,10 @@ final class AdvancedSettings {
         Defaults.ifPresent(key: .tooltipDelay, assign: &tooltipDelay)
         Defaults.ifPresent(key: .showMenuBarTooltips, assign: &showMenuBarTooltips)
         Defaults.ifPresent(key: .iconRefreshInterval, assign: &iconRefreshInterval)
-        Defaults.ifPresent(key: .menuBarItemAlertRevealCooldown, assign: &menuBarItemAlertRevealCooldown)
         Defaults.ifPresent(key: .autoZenWhileSharingScreen, assign: &autoZenWhileSharingScreen)
         Defaults.ifPresent(key: .enableDiagnosticLogging, assign: &enableDiagnosticLogging)
         Defaults.ifPresent(key: .enableMenuBarItemOverflow, assign: &enableMenuBarItemOverflow)
         Defaults.ifPresent(key: .enableNativeAppHiding, assign: &enableNativeAppHiding)
-        Defaults.ifPresent(key: .enableExperimentalSystemItemHiding, assign: &enableExperimentalSystemItemHiding)
         Defaults.ifPresent(key: .enableExperimentalOverflowPrevention, assign: &enableExperimentalOverflowPrevention)
         Defaults.ifPresent(key: .alwaysUseAppIconForMenuBarItems, assign: &alwaysUseAppIconForMenuBarItems)
         Defaults.ifPresent(key: .enableMenuBarItemDescenders, assign: &enableMenuBarItemDescenders)
@@ -404,6 +379,7 @@ final class AdvancedSettings {
         Defaults.ifPresent(key: .enableControlItemPanel, assign: &enableControlItemPanel)
         Defaults.ifPresent(key: .fetchReleaseNotes, assign: &fetchReleaseNotes)
         Defaults.ifPresent(key: .enableModuleStandIns, assign: &enableModuleStandIns)
+        skippedModuleStandIns = Defaults.stringArray(forKey: .skippedModuleStandIns).map(Set.init) ?? skippedModuleStandIns
         Defaults.ifPresent(key: .enableTimeMachineTakeover, assign: &enableTimeMachineTakeover)
         Defaults.ifPresent(key: .enableTimerTakeover, assign: &enableTimerTakeover)
         Defaults.ifPresent(key: .enableTextInputTakeover, assign: &enableTextInputTakeover)
@@ -421,9 +397,6 @@ final class AdvancedSettings {
         }
         Defaults.ifPresent(key: .enableDesktopMenuHiding, assign: &enableDesktopMenuHiding)
         Defaults.ifPresent(key: .menuBarOrderFulfillmentTimeout, assign: &menuBarOrderFulfillmentTimeout)
-        Defaults.ifPresent(key: .searchIncludeVisible, assign: &searchIncludeVisible)
-        Defaults.ifPresent(key: .searchIncludeHidden, assign: &searchIncludeHidden)
-        Defaults.ifPresent(key: .searchIncludeAlwaysHidden, assign: &searchIncludeAlwaysHidden)
 
         Defaults.ifPresent(key: .menuBarSearchPresentation) { (raw: String) in
             if let presentation = SearchPresentation(rawValue: raw) {
@@ -436,33 +409,14 @@ final class AdvancedSettings {
                 sectionDividerStyle = style
             }
         }
+        customSectionDividerImage = Defaults.data(forKey: .customSectionDividerImage)
+        Defaults.ifPresent(key: .customSectionDividerIsTemplate, assign: &customSectionDividerIsTemplate)
 
         Defaults.ifPresent(key: .menuBarArrangementMode) { rawValue in
             if let mode = MenuBarArrangementMode(rawValue: rawValue) {
                 menuBarArrangementMode = mode
             }
         }
-
-        Defaults.ifPresent(key: .searchSectionOrder) { (rawValues: [String]) in
-            searchSectionOrder = Self.sanitizedSearchSectionOrder(from: rawValues)
-        }
-    }
-
-    /// Keep each section once in preferred order, appending missing cases; unusable input yields the default order.
-    static func sanitizedSearchSectionOrder(from rawValues: [String]) -> [MenuBarSection.Name] {
-        var seen = Set<MenuBarSection.Name>()
-        var ordered: [MenuBarSection.Name] = []
-        for raw in rawValues {
-            guard let name = MenuBarSection.Name(rawValue: raw), !seen.contains(name) else {
-                continue
-            }
-            ordered.append(name)
-            seen.insert(name)
-        }
-        for name in MenuBarSection.Name.allCases where !seen.contains(name) {
-            ordered.append(name)
-        }
-        return ordered
     }
 
     /// didSet handles persistence; Combine only observes external Settings-URI changes.
@@ -504,8 +458,6 @@ final class AdvancedSettings {
                 enableDiagnosticLogging = boolValue
             case "enableMenuBarItemOverflow":
                 enableMenuBarItemOverflow = boolValue
-            case "enableExperimentalSystemItemHiding":
-                enableExperimentalSystemItemHiding = boolValue
             case "enableExperimentalOverflowPrevention":
                 enableExperimentalOverflowPrevention = boolValue
             case "alwaysUseAppIconForMenuBarItems":
@@ -526,12 +478,6 @@ final class AdvancedSettings {
                 zenModeWhileRecording = boolValue
             case "enableDesktopMenuHiding":
                 enableDesktopMenuHiding = boolValue
-            case "searchIncludeVisible":
-                searchIncludeVisible = boolValue
-            case "searchIncludeHidden":
-                searchIncludeHidden = boolValue
-            case "searchIncludeAlwaysHidden":
-                searchIncludeAlwaysHidden = boolValue
             default:
                 // Key not handled by AdvancedSettings
                 break
@@ -546,8 +492,6 @@ final class AdvancedSettings {
                 tooltipDelay = doubleValue
             case "iconRefreshInterval":
                 iconRefreshInterval = doubleValue
-            case "menuBarItemAlertRevealCooldown":
-                menuBarItemAlertRevealCooldown = doubleValue
             case "menuBarOrderFulfillmentTimeout":
                 menuBarOrderFulfillmentTimeout = doubleValue
             default:

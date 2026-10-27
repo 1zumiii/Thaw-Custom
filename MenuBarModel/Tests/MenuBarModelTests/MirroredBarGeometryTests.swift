@@ -18,19 +18,6 @@ struct MirroredBarGeometryTests {
     /// Secondary: 2560×1440 to the left, as measured.
     private static let secondary = CGRect(x: -2560, y: 0, width: 2560, height: 1440)
 
-    @Test("The menu bar band is at the top of a display in Core Graphics space")
-    func menuBarBandIsAtTheTop() {
-        // Top-left origin: the bar is the band starting at minY, on either display.
-        #expect(MirroredBarGeometry.isInMenuBar(CGPoint(x: -1200, y: 12), of: Self.secondary, menuBarHeight: 33))
-        #expect(MirroredBarGeometry.isInMenuBar(CGPoint(x: 900, y: 0), of: Self.main, menuBarHeight: 33))
-        #expect(!MirroredBarGeometry.isInMenuBar(CGPoint(x: -1200, y: 1430), of: Self.secondary, menuBarHeight: 33))
-        #expect(!MirroredBarGeometry.isInMenuBar(CGPoint(x: 900, y: 1070), of: Self.main, menuBarHeight: 33))
-        // A display stacked below the main one starts at a positive minY.
-        let below = CGRect(x: 0, y: 1080, width: 1920, height: 1080)
-        #expect(MirroredBarGeometry.isInMenuBar(CGPoint(x: 900, y: 1090), of: below, menuBarHeight: 33))
-        #expect(!MirroredBarGeometry.isInMenuBar(CGPoint(x: 900, y: 2150), of: below, menuBarHeight: 33))
-    }
-
     @Test("A frame on the display it was reported from is unchanged")
     func sameDisplayIsIdentity() {
         let frame = CGRect(x: 1588, y: 0, width: 35, height: 30)

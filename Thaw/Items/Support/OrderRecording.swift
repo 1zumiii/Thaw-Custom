@@ -55,6 +55,24 @@ nonisolated enum OrderRecording {
         }
     }
 
+    /// A saved order re-keyed by section name, the form the controller takes an observed order in.
+    /// Keys that name no section are dropped.
+    static func observedOrder(from saved: [String: [String]]) -> [MenuBarSectionName: [String]] {
+        saved.reduce(into: [:]) { result, entry in
+            guard let section = MenuBarSectionName(rawValue: entry.key) else { return }
+            result[section] = entry.value
+        }
+    }
+
+    /// The controller's order as Thaw keeps a saved order, keyed by section raw value.
+    /// A section with no members has no entry, as in the mirror.
+    static func savedOrder(from controllerOrder: [MenuBarSectionName: [String]]) -> [String: [String]] {
+        controllerOrder.reduce(into: [:]) { result, entry in
+            guard !entry.value.isEmpty else { return }
+            result[entry.key.rawValue] = entry.value
+        }
+    }
+
     /// User drops already verified their position; only structural edits and repairs need another rewrite.
     static func shouldNormalizeStructureAfterMove(
         item: MenuBarItem,

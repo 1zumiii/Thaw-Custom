@@ -8,6 +8,7 @@
 import AppKit
 import Foundation
 import MenuBarModel
+import PlatformRuntimeKit
 import ThawLayout
 
 extension MenuBarItemManager {
@@ -93,8 +94,7 @@ extension MenuBarItemManager {
     }
 
     func loadSavedSectionOrder() {
-        let key = "MenuBarItemManager.savedSectionOrder"
-        if let stored = UserDefaults.standard.dictionary(forKey: key) as? [String: [String]] {
+        if let stored = UserDefaults.standard.dictionary(forKey: SavedSectionOrderDefaults.key) as? [String: [String]] {
             savedSectionOrder = Self.canonicalizedSectionOrder(stored)
         }
     }
@@ -138,9 +138,52 @@ extension MenuBarItemManager {
     }
 
     func persistSavedSectionOrder() {
-        let key = "MenuBarItemManager.savedSectionOrder"
         savedSectionOrder = Self.canonicalizedSectionOrder(savedSectionOrder)
-        UserDefaults.standard.set(savedSectionOrder, forKey: key)
+        UserDefaults.standard.set(savedSectionOrder, forKey: SavedSectionOrderDefaults.key)
+    }
+
+    /// Hands a mirror to the controller and adopts its committed order, since it may refuse membership changes.
+    func adoptMirroredOrder(
+        _ resolved: [String: [String]],
+        controller: (any MenuBarSectionControlling)?
+    ) {
+        if let controller, let recorder = controller as? any ObservedOrderRecording {
+            recorder.recordObservedOrder(OrderRecording.observedOrder(from: resolved))
+            adoptControllerOrder(from: controller)
+            return
+        }
+        guard resolved != savedSectionOrder else { return }
+        savedSectionOrder = resolved
+        persistSavedSectionOrder()
+        MenuBarItemManager.diagLog.debug(
+            "Mirrored macOS 27 section order: \(resolved.mapValues(\.count))"
+        )
+    }
+
+    /// Takes the order the controller committed as Thaw's own saved order, so the two agree after it normalized.
+    func adoptControllerOrder(from controller: any MenuBarSectionControlling) {
+        savedSectionOrder = OrderRecording.savedOrder(from: controller.sectionItemOrder)
+        persistSavedSectionOrder()
+    }
+
+    /// Applies a profile's layout to the controller, then keeps the order it committed rather than the profile's.
+    func commitProfileLayout(
+        itemSectionMap: [String: String],
+        itemOrder: [String: [String]],
+        to controller: any MenuBarSectionControlling
+    ) {
+        controller.applyProfileLayout(itemSectionMap: itemSectionMap, itemOrder: itemOrder)
+        adoptControllerOrder(from: controller)
+    }
+
+    /// Resets the controller's assignment, then keeps the order it left rather than clearing Thaw's copy.
+    /// The controller decides what survives a reset, such as the Visible order.
+    func resetControllerAssignment(
+        to assignment: [String: MenuBarSectionName],
+        controller: any MenuBarSectionControlling
+    ) {
+        controller.resetAssignment(to: assignment)
+        adoptControllerOrder(from: controller)
     }
 
     private static func canonicalizedSectionOrder(

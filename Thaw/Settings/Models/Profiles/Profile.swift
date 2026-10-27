@@ -26,6 +26,20 @@ nonisolated struct ProfileMetadata: Codable, Identifiable, Hashable {
     /// The user-facing label for the associated Space. Spaces have no system
     /// name, so this is the label current when the association was made.
     var associatedSpaceName: String?
+    /// Whether drags and Layout edits are saved into this profile while it is
+    /// active. Nil in manifests written before the switch, which reads as on.
+    var keepsLayoutChangesSetting: Bool?
+    /// Whether Thaw applies this profile's layout again when it starts with
+    /// the profile already active. Nil reads as off.
+    var reappliesAtLaunchSetting: Bool?
+
+    var keepsLayoutChanges: Bool {
+        keepsLayoutChangesSetting ?? true
+    }
+
+    var reappliesAtLaunch: Bool {
+        reappliesAtLaunchSetting ?? false
+    }
 }
 
 // MARK: - GeneralSettingsSnapshot
@@ -178,15 +192,10 @@ nonisolated struct AdvancedSettingsSnapshot: Codable {
     var tooltipDelay: TimeInterval
     var showMenuBarTooltips: Bool
     var iconRefreshInterval: TimeInterval
-    var menuBarItemAlertRevealCooldown: TimeInterval
     var autoZenWhileSharingScreen: Bool
     var enableDiagnosticLogging: Bool
     var enableMenuBarItemOverflow: Bool
-    var enableExperimentalSystemItemHiding: Bool
-    var searchSectionOrder: [String]
-    var searchIncludeVisible: Bool
-    var searchIncludeHidden: Bool
-    var searchIncludeAlwaysHidden: Bool
+    // Apple-item hiding follows the hiding method, which profiles do not switch, so older profiles' value is ignored.
 
     /// The value every field takes when a profile predates it.
     static let defaults = AdvancedSettingsSnapshot(
@@ -199,15 +208,9 @@ nonisolated struct AdvancedSettingsSnapshot: Codable {
         tooltipDelay: Defaults.DefaultValue.tooltipDelay,
         showMenuBarTooltips: Defaults.DefaultValue.showMenuBarTooltips,
         iconRefreshInterval: Defaults.DefaultValue.iconRefreshInterval,
-        menuBarItemAlertRevealCooldown: Defaults.DefaultValue.menuBarItemAlertRevealCooldown,
         autoZenWhileSharingScreen: Defaults.DefaultValue.autoZenWhileSharingScreen,
         enableDiagnosticLogging: Defaults.DefaultValue.enableDiagnosticLogging,
-        enableMenuBarItemOverflow: Defaults.DefaultValue.enableMenuBarItemOverflow,
-        enableExperimentalSystemItemHiding: Defaults.DefaultValue.enableExperimentalSystemItemHiding,
-        searchSectionOrder: Defaults.DefaultValue.searchSectionOrder,
-        searchIncludeVisible: Defaults.DefaultValue.searchIncludeVisible,
-        searchIncludeHidden: Defaults.DefaultValue.searchIncludeHidden,
-        searchIncludeAlwaysHidden: Defaults.DefaultValue.searchIncludeAlwaysHidden
+        enableMenuBarItemOverflow: Defaults.DefaultValue.enableMenuBarItemOverflow
     )
 
     @MainActor
@@ -222,15 +225,9 @@ nonisolated struct AdvancedSettingsSnapshot: Codable {
             tooltipDelay: settings.tooltipDelay,
             showMenuBarTooltips: settings.showMenuBarTooltips,
             iconRefreshInterval: settings.iconRefreshInterval,
-            menuBarItemAlertRevealCooldown: settings.menuBarItemAlertRevealCooldown,
             autoZenWhileSharingScreen: settings.autoZenWhileSharingScreen,
             enableDiagnosticLogging: settings.enableDiagnosticLogging,
-            enableMenuBarItemOverflow: settings.enableMenuBarItemOverflow,
-            enableExperimentalSystemItemHiding: settings.enableExperimentalSystemItemHiding,
-            searchSectionOrder: settings.searchSectionOrder.map(\.rawValue),
-            searchIncludeVisible: settings.searchIncludeVisible,
-            searchIncludeHidden: settings.searchIncludeHidden,
-            searchIncludeAlwaysHidden: settings.searchIncludeAlwaysHidden
+            enableMenuBarItemOverflow: settings.enableMenuBarItemOverflow
         )
     }
 
@@ -247,15 +244,9 @@ nonisolated struct AdvancedSettingsSnapshot: Codable {
         settings.tooltipDelay = tooltipDelay
         settings.showMenuBarTooltips = showMenuBarTooltips
         settings.iconRefreshInterval = iconRefreshInterval
-        settings.menuBarItemAlertRevealCooldown = menuBarItemAlertRevealCooldown
         settings.autoZenWhileSharingScreen = autoZenWhileSharingScreen
         settings.enableDiagnosticLogging = enableDiagnosticLogging
         settings.enableMenuBarItemOverflow = enableMenuBarItemOverflow
-        settings.enableExperimentalSystemItemHiding = enableExperimentalSystemItemHiding
-        settings.searchSectionOrder = AdvancedSettings.sanitizedSearchSectionOrder(from: searchSectionOrder)
-        settings.searchIncludeVisible = searchIncludeVisible
-        settings.searchIncludeHidden = searchIncludeHidden
-        settings.searchIncludeAlwaysHidden = searchIncludeAlwaysHidden
     }
 }
 
@@ -287,9 +278,6 @@ nonisolated extension AdvancedSettingsSnapshot {
         iconRefreshInterval = try container.decode(
             .iconRefreshInterval, default: Self.defaults.iconRefreshInterval
         )
-        menuBarItemAlertRevealCooldown = try container.decode(
-            .menuBarItemAlertRevealCooldown, default: Self.defaults.menuBarItemAlertRevealCooldown
-        )
         autoZenWhileSharingScreen = try container.decode(
             .autoZenWhileSharingScreen, default: Self.defaults.autoZenWhileSharingScreen
         )
@@ -298,22 +286,6 @@ nonisolated extension AdvancedSettingsSnapshot {
         )
         enableMenuBarItemOverflow = try container.decode(
             .enableMenuBarItemOverflow, default: Self.defaults.enableMenuBarItemOverflow
-        )
-        enableExperimentalSystemItemHiding = try container.decode(
-            .enableExperimentalSystemItemHiding,
-            default: Self.defaults.enableExperimentalSystemItemHiding
-        )
-        searchSectionOrder = try container.decode(
-            .searchSectionOrder, default: Self.defaults.searchSectionOrder
-        )
-        searchIncludeVisible = try container.decode(
-            .searchIncludeVisible, default: Self.defaults.searchIncludeVisible
-        )
-        searchIncludeHidden = try container.decode(
-            .searchIncludeHidden, default: Self.defaults.searchIncludeHidden
-        )
-        searchIncludeAlwaysHidden = try container.decode(
-            .searchIncludeAlwaysHidden, default: Self.defaults.searchIncludeAlwaysHidden
         )
     }
 }
@@ -558,6 +530,9 @@ nonisolated struct ProfileExportEntry: Codable {
     /// never match locally, so importing one is harmless rather than useful.
     var associatedSpaceKey: String?
     var associatedSpaceName: String?
+    /// The profile's layout switches. Nil in files exported before them.
+    var keepsLayoutChanges: Bool?
+    var reappliesAtLaunch: Bool?
 }
 
 /// Wrapper for exporting multiple profiles as a single file.

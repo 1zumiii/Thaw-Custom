@@ -5,6 +5,7 @@
 //  Copyright (Thaw) © 2026 Toni Förster
 //  Licensed under the GNU GPLv3
 
+import AppKit
 import MenuBarModel
 import UserNotifications
 
@@ -12,6 +13,11 @@ import UserNotifications
 final class UserNotificationManager: NSObject {
     private let diagLog = DiagLog(category: "UserNotificationManager")
     private(set) weak var appState: AppState?
+    private var activationTask: Task<Void, Never>?
+
+    /// Whether a notification Thaw posts can show an alert, read at setup and each time
+    /// Thaw becomes active. Optimistic until the first read returns.
+    private(set) var canAlert = true
 
     var notificationCenter: UNUserNotificationCenter {
         .current()
@@ -20,6 +26,19 @@ final class UserNotificationManager: NSObject {
     func performSetup(with appState: AppState) {
         self.appState = appState
         notificationCenter.delegate = self
+        refreshAlertPermission()
+        activationTask?.cancel()
+        activationTask = NotificationCenter.default.eventsTask(named: NSApplication.didBecomeActiveNotification) { [weak self] in
+            self?.refreshAlertPermission()
+        }
+    }
+
+    private func refreshAlertPermission() {
+        Task {
+            let settings = await notificationCenter.notificationSettings()
+            canAlert = [.authorized, .provisional].contains(settings.authorizationStatus)
+                && settings.alertSetting == .enabled
+        }
     }
 
     /// Requests authorization to allow user notifications for the app.

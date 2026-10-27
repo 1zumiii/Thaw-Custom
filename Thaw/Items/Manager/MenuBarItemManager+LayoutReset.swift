@@ -115,7 +115,7 @@ extension MenuBarItemManager {
         // Explicit requests and dependent probe transitions bypass the observation rate limit.
         if !immediate, !reason.permitsOrderEnforcement,
            let last = lastOverflowRebalance,
-           Date().timeIntervalSince(last) < 2.0
+           last.duration(to: .now) < .seconds(2)
         {
             return false
         }
@@ -170,7 +170,6 @@ extension MenuBarItemManager {
             overflowControlBounds: overflowControlBounds
         )
         let availableWidth = capacity.availableWidth(
-            in: .trailing,
             applicationMenus: .visible,
             reserving: permanentNonProfileBounds
         )
@@ -303,7 +302,7 @@ extension MenuBarItemManager {
             effectiveAvailableWidth = max(1, effectiveAvailableWidth - width)
         }
 
-        // Visible items parked at x == -1 indicate the bar had no room to draw them.
+        // Visible items macOS left off the bar, parked or behind its arrow, mean it had no room for them.
         // Only on a settled, concealed bar: a reveal fills the bar with hidden
         // items, or with whole apps under native hiding, and macOS parks Visible
         // items that fit again once it closes. Counting them hid them for good.
@@ -312,11 +311,10 @@ extension MenuBarItemManager {
         let isBarSettled = controller.revealedSection == nil
             && !appState.menuBarManager.isRevealHideTransitionActive
         let parkedWidths = !isBarSettled ? [] : visibleLive
-            .filter { item in
-                let key = MenuBarItemTag.canonicalPersistentIdentifier(item.uniqueIdentifier)
-                return item.bounds.minX == MenuBarItemGeometry.transientSentinelX
-                    && !overflowIdentifiers.contains(item.uniqueIdentifier)
-                    && !concealedIdentifiers.contains(key)
+            .filter { [screens = BarAxis.liveDisplayBounds()] item in
+                NotShownOnBar.isLeftOffTheBar(item, among: visibleLive, screens: screens)
+                    && !ItemConcealment.isConcealed(item.uniqueIdentifier, in: overflowIdentifiers)
+                    && !ItemConcealment.isConcealed(item.uniqueIdentifier, in: concealedIdentifiers)
             }
             .map(\.bounds.width)
         let parkedDeficit = overflowDeficits.updateParkedLane(
@@ -351,7 +349,7 @@ extension MenuBarItemManager {
         )
         Self.logOverflowDiagnostics(overflowResult)
 
-        lastOverflowRebalance = Date()
+        lastOverflowRebalance = .now
         let overflowSet = Set(overflowResult.overflowUIDs)
         let overflowItems = visibleLive.filter { overflowSet.contains($0.uniqueIdentifier) }
         if overflowItems.count != overflowSet.count {
@@ -401,13 +399,11 @@ extension MenuBarItemManager {
         // Controller assignments drive the assertion and persist via Thaw.simpleSectionAssignment; only profiles overwrite them.
         // Mirror savedSectionOrder from the controller, since restoring its lagging copy on windowID changes undoes user drags.
         if source == .profile {
-            controller.applyProfileLayout(
+            commitProfileLayout(
                 itemSectionMap: itemSectionMap,
-                itemOrder: itemOrder
+                itemOrder: itemOrder,
+                to: controller
             )
-
-            savedSectionOrder = itemOrder
-            persistSavedSectionOrder()
         }
 
         // Visible items have live AX elements, but only profiles reconcile synthetically; assignment mirroring owns membership.
@@ -428,7 +424,7 @@ extension MenuBarItemManager {
             "applyProfileLayout (macOS 27): applied \(controller.sectionAssignment.count) assignment(s)"
         )
 
-        persistProfileStateOnSuccess(source: source)
+        persistProfileStateOnSuccess(source: source, controller: controller)
         clearProfileState(source: source)
         scheduleDeferredCacheRefresh()
         return true
@@ -446,10 +442,6 @@ extension MenuBarItemManager {
             MenuBarItemManager.diagLog.warning("macOS 27 reset: no RuntimeSectionController; nothing to do")
             throw LayoutResetError.engineNotRunning
         }
-
-        // Drop any stale legacy persisted order so the two models never fight.
-        savedSectionOrder.removeAll()
-        persistSavedSectionOrder()
 
         // Refresh inventory to include layout-anchored system items for experimental hiding.
         await cacheItemsRegardless(skipRecentMoveCheck: true)
@@ -475,7 +467,7 @@ extension MenuBarItemManager {
             assignment[item.uniqueIdentifier] = target
         }
 
-        controller.resetAssignment(to: assignment)
+        resetControllerAssignment(to: assignment, controller: controller)
         if !skippedProtectedItems.isEmpty {
             MenuBarItemManager.diagLog.info("macOS 27 reset: skipped \(skippedProtectedItems.count) protected item(s): \(skippedProtectedItems)")
         }
@@ -549,10 +541,8 @@ extension MenuBarItemManager {
         pinnedHiddenBundleIDs.removeAll()
         pinnedAlwaysHiddenBundleIDs.removeAll()
         persistPinnedBundleIDs()
-        savedSectionOrder.removeAll()
-        persistSavedSectionOrder()
 
-        controller.resetAssignment(to: [:])
+        resetControllerAssignment(to: [:], controller: controller)
         MenuBarItemManager.diagLog.info("macOS 27 reset-to-visible: cleared all section assignments")
 
         await cacheItemsRegardless(skipRecentMoveCheck: true)
@@ -620,17 +610,6 @@ extension MenuBarItemManager {
         isApplyingProfileLayout = false
     }
 
-    /// Recheck settling after each await: performSetup re-entry can cancel the captured task and start a new window.
-    private func waitForStartupSettlingToEnd() async {
-        while isInStartupSettling {
-            guard let settlingTask = startupSettlingTask else { break }
-            MenuBarItemManager.diagLog.debug(
-                "applyProfileLayout: waiting for startup settling to end"
-            )
-            await settlingTask.value
-        }
-    }
-
     /// Selects entry/exit state handling; the rest of the apply path is shared.
     enum ApplySource {
         /// A profile spec overwrites savedSectionOrder, the pinning sets and
@@ -687,10 +666,12 @@ extension MenuBarItemManager {
     }
 
     /// Commits profile pins and order only after the bar reflects them; savedOrder leaves both stores unchanged.
-    private func persistProfileStateOnSuccess(source: ApplySource) {
+    /// The order written is the controller's as it stands now, so Thaw's copy agrees with it
+    /// when the apply is reported done.
+    func persistProfileStateOnSuccess(source: ApplySource, controller: any MenuBarSectionControlling) {
         guard case .profile = source else { return }
         persistPinnedBundleIDs()
-        persistSavedSectionOrder()
+        adoptControllerOrder(from: controller)
     }
 
     /// Clears the profile gate only for profile applies.
@@ -729,7 +710,11 @@ extension MenuBarItemManager {
         // MARK: Phase 0: gate on startup settling
 
         // cacheItemsRegardless skips restore during settling, which would silently shadow these moves.
-        await waitForStartupSettlingToEnd()
+        // performSetup re-entry can replace the settling task, so the wait follows the replacement.
+        if isInStartupSettling {
+            MenuBarItemManager.diagLog.debug("applyProfileLayout: waiting for startup settling to end")
+        }
+        await SettlingWait.follow(isSettling: { isInStartupSettling }, currentTask: { startupSettlingTask })
 
         // A newer apply may cancel us during settling; do not arm the superseded profile's state.
         if Task.isCancelled {
@@ -763,7 +748,7 @@ extension MenuBarItemManager {
 
         // Both apply sources must prevent the cache from saving intermediate positions.
         isRestoringItemOrder = true
-        isRestoringItemOrderTimestamp = Date()
+        isRestoringItemOrderTimestamp = .now
         defer {
             isRestoringItemOrder = false
             isRestoringItemOrderTimestamp = nil

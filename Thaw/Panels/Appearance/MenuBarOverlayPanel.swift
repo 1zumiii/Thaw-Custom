@@ -9,6 +9,7 @@ import AsyncAlgorithms
 import Cocoa
 import Combine
 import MenuBarModel
+import ThawUI
 
 private final class MenuBarLiquidGlassFadeView: NSView {
     var isEnabled = false {
@@ -134,8 +135,8 @@ final class MenuBarOverlayPanel: NSPanel {
     /// Debounce repeated show requests and clear them after positioning the panel.
     @Published var needsShow = false
 
-    /// Track per-display fullscreen bar absence separately; another app's fullscreen transition does not change Thaw's presentation options.
-    private var isSystemMenuBarAbsent = false
+    /// Track per-display fullscreen Spaces separately; another app's fullscreen transition does not change Thaw's presentation options.
+    private var showsFullscreenSpace = false
 
     /// The Mission Control probe, which owns the probe window and the state
     /// that decides when the overlay should fade.
@@ -211,6 +212,7 @@ final class MenuBarOverlayPanel: NSPanel {
         if let appState {
             subscriptions.append(observeMenuBarVisibility(appState: appState))
             subscriptions.append(observeConfigurationForWindowLevel(appState: appState))
+            subscriptions.append(observeActiveSpaceSamples(appState: appState))
         }
         cancellables = Set(subscriptions)
 
@@ -272,7 +274,7 @@ final class MenuBarOverlayPanel: NSPanel {
     }
 
     /// Probe rate based on time at rest; see MissionControlShieldProbe.tickInterval(atRestFor:).
-    static nonisolated func missionControlProbeTickInterval(atRestFor restDuration: TimeInterval?) -> TimeInterval {
+    static nonisolated func missionControlProbeTickInterval(atRestFor restDuration: Duration?) -> TimeInterval {
         MissionControlShieldProbe.tickInterval(atRestFor: restDuration)
     }
 
@@ -387,6 +389,18 @@ final class MenuBarOverlayPanel: NSPanel {
         return AnyCancellable { task.cancel() }
     }
 
+    /// AppState also samples the Space on app switches and clicks, which catches a fullscreen entry the notification missed or reported early.
+    private func observeActiveSpaceSamples(appState: AppState) -> AnyCancellable {
+        let task = Task { @MainActor [weak self, weak appState] in
+            let changes = Observations { appState?.activeSpace }
+            for await _ in changes {
+                guard let self else { return }
+                refreshSystemMenuBarPresence()
+            }
+        }
+        return AnyCancellable { task.cancel() }
+    }
+
     /// Skip frame reads during teardown (pipelines can still fire) or system hiding, when geometry is not on screen.
     private func refreshApplicationMenuFrame() {
         guard
@@ -403,7 +417,7 @@ final class MenuBarOverlayPanel: NSPanel {
         guard let menuBarManager = appState?.menuBarManager else { return true }
         return !menuBarManager.isMenuBarHiddenBySystem
             && !missionControlProbe.isActive
-            && !isSystemMenuBarAbsent
+            && !showsFullscreenSpace
     }
 
     private func applyVisibility() {
@@ -412,26 +426,13 @@ final class MenuBarOverlayPanel: NSPanel {
     }
 
     private func refreshSystemMenuBarPresence() {
-        // Entering or leaving a fullscreen Space changes which level keeps the panel under the items.
+        // A fullscreen Space shifts its content, this panel included, below a bar that stays shown, so the overlay steps aside there.
         updateWindowLevel()
-        let absent = Self.isSystemMenuBarHidden(on: owningScreen)
-        guard absent != isSystemMenuBarAbsent else { return }
-        isSystemMenuBarAbsent = absent
-        diagLog.debug("Overlay: system menu bar on display \(owningScreen.displayID) is \(absent ? "hidden" : "shown")")
+        let fullscreen = OverlaySpaceLookup.isFullscreenSpace(on: owningScreen)
+        guard fullscreen != showsFullscreenSpace else { return }
+        showsFullscreenSpace = fullscreen
+        diagLog.debug("Overlay: display \(owningScreen.displayID) shows a \(fullscreen ? "fullscreen" : "desktop") Space")
         applyVisibility()
-    }
-
-    /// Use fullscreen Space reveal state, defaulting to shown when unavailable.
-    /// macOS 27's main bar has no enumerable window even while visible.
-    private static func isSystemMenuBarHidden(on screen: NSScreen) -> Bool {
-        guard
-            let spaceID = Bridging.getCurrentSpaceID(for: screen.displayID),
-            Bridging.isSpaceFullscreen(spaceID)
-        else {
-            return false
-        }
-        let state = Bridging.menuBarRevealState(forSpace: spaceID)
-        return state.isAvailable && !state.isVisible && state.revealFraction <= 0
     }
 
     /// Read height at show time because it changes with the screen; retry unavailable geometry during display reconfiguration.
@@ -452,7 +453,7 @@ final class MenuBarOverlayPanel: NSPanel {
         let menuBarHeight = Self.overlayBarHeight(
             windowHeight: windowHeight,
             applicationMenuHeight: owningScreen.getApplicationMenuFrame()?.height,
-            isFullscreenSpace: Self.isFullscreenSpace(on: owningScreen),
+            isFullscreenSpace: OverlaySpaceLookup.isFullscreenSpace(on: owningScreen),
             readsOwnMenuFrame: owningScreen == NSScreen.main
         )
         if menuBarHeight != windowHeight {
@@ -520,16 +521,11 @@ final class MenuBarOverlayPanel: NSPanel {
             || config.current.backgroundKind != .none
         let newLevel = Self.overlayLevel(
             hasAppearance: hasAppearance,
-            isFullscreenSpace: Self.isFullscreenSpace(on: owningScreen)
+            isFullscreenSpace: OverlaySpaceLookup.isFullscreenSpace(on: owningScreen)
         )
         if level != newLevel {
             level = newLevel
         }
-    }
-
-    private static func isFullscreenSpace(on screen: NSScreen) -> Bool {
-        guard let spaceID = Bridging.getCurrentSpaceID(for: screen.displayID) else { return false }
-        return Bridging.isSpaceFullscreen(spaceID)
     }
 
     /// The bar height the panel is sized to. In a fullscreen Space the panel was seen 22 pt taller
@@ -574,6 +570,11 @@ private final class MenuBarOverlayPanelContentView: NSView {
     /// The dominant colors of the wallpaper behind this panel's screen, for
     /// the adaptive gradient tint. nil until the first palette capture lands.
     @Published private var wallpaperPalette: WallpaperPalette?
+
+    /// The shade macOS drew the icons in, read only while a glass finish follows it.
+    @Published private var iconShade: MenuBarIconShade?
+    private var iconShadeTask: Task<Void, Never>?
+    private var iconShadeSchedule = IconShadeReadSchedule()
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -716,6 +717,10 @@ private final class MenuBarOverlayPanelContentView: NSView {
 
     private func configureCancellables() {
         geometryRefresh.cancel()
+        // A read started for the earlier window would land after the new subscriptions.
+        iconShadeTask?.cancel()
+        iconShadeTask = nil
+        iconShadeSchedule.reset()
         var subscriptions = Set<AnyCancellable>()
 
         if let overlayPanel {
@@ -738,6 +743,7 @@ private final class MenuBarOverlayPanelContentView: NSView {
                         if previewConfiguration != preview {
                             previewConfiguration = preview
                         }
+                        readIconShadeIfFollowed()
                     }
                 }
                 AnyCancellable { task.cancel() }
@@ -748,6 +754,8 @@ private final class MenuBarOverlayPanelContentView: NSView {
                     for await colors in changes {
                         guard let self, let panel = self.overlayPanel else { return }
                         averageColorInfo = colors[panel.owningScreen.displayID]
+                        // The schedule reads again only when this display's own average changed.
+                        readIconShadeIfFollowed()
                     }
                 }
                 AnyCancellable { colorsTask.cancel() }
@@ -837,8 +845,9 @@ private final class MenuBarOverlayPanelContentView: NSView {
 
         $fullConfiguration.replace(with: ())
             .merge(with: $previewConfiguration.replace(with: ()))
-            .merge(with: $averageColorInfo.replace(with: ()))
+            .merge(with: $averageColorInfo.removeDuplicates().replace(with: ()))
             .merge(with: $wallpaperPalette.replace(with: ()))
+            .merge(with: $iconShade.replace(with: ()))
             .sink { [weak self] _ in
                 self?.updateBackgroundGlass()
                 self?.needsDisplay = true
@@ -1258,6 +1267,35 @@ private final class MenuBarOverlayPanelContentView: NSView {
             NSColor(cgColor: tintColor)?.withAlphaComponent(opacity)
         } else {
             nil
+        }
+        let hasFinish = MenuBarPrivateGlass.apply(style.privateVariant, to: glassView) && style.followsIconShade
+        // macOS draws the icons over this glass, so a finish takes their shade: read from
+        // the icons when known, else estimated from the bar's colour.
+        let barLuminance = averageColorInfo.flatMap { ForegroundContrast.relativeLuminance(of: $0.color) }
+        let appearanceName = (iconShade ?? barLuminance.map(MenuBarIconShade.estimated))?.matchingGlassAppearance
+        glassView.appearance = hasFinish ? appearanceName.flatMap(NSAppearance.init(named:)) : nil
+    }
+
+    /// Reads the icons' shade when a finish follows it and it's unknown, or
+    /// again when the bar changed. IconShadeReadSchedule decides when.
+    private func readIconShadeIfFollowed() {
+        let followed = configuration.tintGlassStyle.followsIconShade || configuration.backgroundGlassStyle.followsIconShade
+        guard followed, let panel = overlayPanel,
+              iconShadeSchedule.shouldStart(bar: averageColorInfo, hasShade: iconShade != nil)
+        else {
+            return
+        }
+        let displayID = panel.owningScreen.displayID
+        iconShadeTask = Task { [weak self] in
+            let shade = await MenuBarIconShade.read(displayID: displayID)
+            guard let self, !Task.isCancelled else { return }
+            iconShadeTask = nil
+            if let shade, shade != iconShade {
+                iconShade = shade
+            }
+            if iconShadeSchedule.finish(found: shade != nil) {
+                readIconShadeIfFollowed()
+            }
         }
     }
 

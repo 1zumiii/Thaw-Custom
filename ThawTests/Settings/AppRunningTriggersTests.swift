@@ -17,12 +17,12 @@ struct AppRunningTriggersTests {
     }
 
     private func withManager(_ body: (AppRunningTriggersManager, UserDefaults) throws -> Void) throws {
-        let suite = "AppRunningTriggersTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.name("AppRunningTriggersTests")
         let store = try #require(UserDefaults(suiteName: suite))
         let manager = AppRunningTriggersManager(store: store)
         defer {
             manager.stop()
-            store.removePersistentDomain(forName: suite)
+            ScratchDefaults.remove(suite)
         }
         try body(manager, store)
     }
@@ -222,12 +222,12 @@ struct AppRunningTriggersTests {
 
     @Test("Workspace launch and quit notifications drive updates without polling")
     func notifications() async throws {
-        let suite = "AppRunningTriggersTests.\(UUID().uuidString)"
+        let suite = ScratchDefaults.name("AppRunningTriggersTests")
         let store = try #require(UserDefaults(suiteName: suite))
         let manager = AppRunningTriggersManager(store: store)
         defer {
             manager.stop()
-            store.removePersistentDomain(forName: suite)
+            ScratchDefaults.remove(suite)
         }
         let center = NotificationCenter()
         var applications: [pid_t: String] = [:]

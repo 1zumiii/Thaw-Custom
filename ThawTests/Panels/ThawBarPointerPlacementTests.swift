@@ -6,11 +6,12 @@
 //  Licensed under the GNU GPLv3
 
 import AppKit
+import Combine
 import Testing
 @testable import Thaw
 
 @MainActor
-@Suite("Thaw Bar pointer placement", .serialized)
+@Suite("Thaw Bar pointer placement", .serialized, .scratchDefaults)
 struct ThawBarPointerPlacementTests {
     @Test("Resizing retains the opening pointer after it leaves empty menu bar space",
           arguments: [ThawBarLocation.dynamic, .mousePointer], [true, false])
@@ -126,16 +127,8 @@ struct ThawBarPointerPlacementTests {
         showsIcon: Bool = false,
         _ body: (PlacementFixture) throws -> Void
     ) throws {
-        let suite = "ThawBarPointerPlacementTests.\(UUID().uuidString)"
-        let store = try #require(UserDefaults(suiteName: suite))
-        let previousStore = Defaults.store
         let previousPolicy = NSApp.activationPolicy()
-        Defaults.store = store
-        defer {
-            Defaults.store = previousStore
-            store.removePersistentDomain(forName: suite)
-            NSApp.setActivationPolicy(previousPolicy)
-        }
+        defer { NSApp.setActivationPolicy(previousPolicy) }
         let fixture = try PlacementFixture(location: location, showsIcon: showsIcon)
         defer { fixture.panel.close() }
         try body(fixture)
@@ -175,14 +168,21 @@ private struct PlacementFixture {
             pointerLocation: { pointer.location },
             pointerInEmptyMenuBarSpace: { _, _ in pointer.inEmptyMenuBarSpace }
         )
-        panel.performSetup(with: appState)
+        panel.performSetup(
+            with: appState,
+            displayInvalidations: Empty<Void, Never>(completeImmediately: false),
+            displaySettlements: Empty<EnvironmentChange, Never>(completeImmediately: false)
+        )
     }
 
     func show(triggeredByHotkey: Bool = false, openedFrom iconFrame: CGRect? = nil) {
-        // Companion presentation avoids section capture and global dismissal monitors.
+        // Folder presentation avoids section capture.
         panel.show(
-            section: .hidden, on: screen, triggeredByHotkey: triggeredByHotkey,
-            presentation: .alongsideReveal, openedFrom: iconFrame
+            section: .hidden,
+            on: screen,
+            triggeredByHotkey: triggeredByHotkey,
+            presentation: .folder,
+            openedFrom: iconFrame
         )
     }
 

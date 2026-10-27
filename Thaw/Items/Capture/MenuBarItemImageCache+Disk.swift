@@ -14,17 +14,12 @@ extension MenuBarItemImageCache {
     /// Persists what is currently trusted for a faster restart. The file,
     /// its format, and the save queue live on MenuBarItemImageCacheDiskStore.
     func saveToDisk() {
-        guard diskStore.isEnabled else { return }
+        saveToDisk(concealedIdentifiers: appState.map(concealedIdentifiers(in:)) ?? [])
+    }
+
+    private func saveToDisk(concealedIdentifiers: Set<String>) {
         guard !capturesByTag.isEmpty else { return }
 
-        let concealedIdentifiers = appState.map { appState in
-            Set(
-                MenuBarSection.Name.allCases
-                    .filter { $0 != .visible }
-                    .flatMap { appState.itemManager.itemCache[$0] }
-                    .map(\.tag.tagIdentifier)
-            )
-        } ?? []
         let persistable = Self.diskPersistableCaptures(
             capturesByTag: capturesByTag,
             accessTimestamps: accessTimestamps
@@ -68,6 +63,39 @@ extension MenuBarItemImageCache {
         let build = info["CFBundleVersion"] as? String
         guard short != nil || build != nil else { return nil }
         return "\(short ?? "")(\(build ?? ""))"
+    }
+
+    /// Commits a pass, then saves when it changed a hidden item's image, which only a reveal can capture again.
+    func commitRecapturePassSavingConcealed(
+        _ pass: CapturePass,
+        admission: CapturePublicationAdmission,
+        ignoreRecentMove: Bool,
+        appState: AppState
+    ) -> Bool {
+        let before = capturesByTag
+        let didChange = commitRecapturePass(pass, admission: admission, ignoreRecentMove: ignoreRecentMove, appState: appState)
+        guard didChange else { return false }
+        let concealed = concealedIdentifiers(in: appState)
+        let after = capturesByTag
+        let shouldSave = ConcealedCapturePersistence.shouldSave(capturedTags: pass.captured.keys, concealedIdentifiers: concealed) {
+            !MenuBarItemGlyphCapture.isVisuallyEqual(before[$0], after[$0])
+        }
+        if shouldSave {
+            saveToDisk(concealedIdentifiers: concealed)
+        }
+        return didChange
+    }
+
+    /// The identifiers of the items the item cache places outside the visible section, keyed as the disk file
+    /// keys them. This is section membership by tagIdentifier, not the section controller's effective
+    /// concealment by uniqueIdentifier.
+    func concealedIdentifiers(in appState: AppState) -> Set<String> {
+        Set(
+            MenuBarSection.Name.allCases
+                .filter { $0 != .visible }
+                .flatMap { appState.itemManager.itemCache[$0] }
+                .map(\.tag.tagIdentifier)
+        )
     }
 
     /// Collapses the live cache to one capture per tagIdentifier, the key the
@@ -277,16 +305,5 @@ extension MenuBarItemImageCache {
         diskLoadTask?.cancel()
         diskLoadTask = nil
         diskLoadGeneration &+= 1
-    }
-
-    /// Blocks saves while a reset deletes the file, and makes the store forget
-    /// what it believes is on disk.
-    func suspendDiskPersistenceForReset() async {
-        await diskStore.suspendForReset()
-    }
-
-    /// Restores persistence after a reset failed and the cache file survived.
-    func resumeDiskPersistenceAfterFailedReset() {
-        diskStore.resumeAfterFailedReset()
     }
 }

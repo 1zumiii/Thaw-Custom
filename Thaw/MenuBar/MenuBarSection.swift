@@ -59,10 +59,7 @@ final class MenuBarSection {
         capacity: MenuBarCapacitySnapshot,
         allowHidingApplicationMenus: Bool
     ) -> PresentationMode {
-        if let inlineWidth = capacity.availableWidth(
-            in: .inline,
-            applicationMenus: .visible
-        ), totalItemsWidth <= inlineWidth {
+        if let inlineWidth = capacity.availableWidth(applicationMenus: .visible), totalItemsWidth <= inlineWidth {
             return .inline
         }
 
@@ -70,10 +67,7 @@ final class MenuBarSection {
             return .thawBar
         }
 
-        if let inlineWidthWithoutAppMenus = capacity.availableWidth(
-            in: .inline,
-            applicationMenus: .hidden
-        ), totalItemsWidth <= inlineWidthWithoutAppMenus {
+        if let inlineWidthWithoutAppMenus = capacity.availableWidth(applicationMenus: .hidden), totalItemsWidth <= inlineWidthWithoutAppMenus {
             return .inlineHidingApplicationMenus
         }
 
@@ -87,7 +81,7 @@ final class MenuBarSection {
         allowHidingApplicationMenus: Bool
     ) -> Bool {
         let menus: MenuBarCapacitySnapshot.ApplicationMenus = allowHidingApplicationMenus ? .hidden : .visible
-        guard let width = capacity.availableWidth(in: .inline, applicationMenus: menus) else {
+        guard let width = capacity.availableWidth(applicationMenus: menus) else {
             return false
         }
         return totalItemsWidth > width
@@ -171,6 +165,11 @@ final class MenuBarSection {
         return appState?.menuBarManager.sectionController.isSectionHidden(name) ?? true
     }
 
+    /// The display setting owns Hidden's visibility while Always Hidden stays toggleable.
+    var isToggleEnabled: Bool {
+        isEnabled && (name != .hidden || menuBarManager?.shouldAlwaysShowHiddenItems != true)
+    }
+
     /// Visible and Hidden stay enabled even with zero-width controls because layout bars drive assignments.
     /// Always Hidden requires user opt-in.
     var isEnabled: Bool {
@@ -210,11 +209,11 @@ final class MenuBarSection {
         self.init(name: name, controlItem: controlItem)
     }
 
-    func performSetup(with appState: AppState) {
+    func performSetup(with appState: AppState, displays: DisplayEnvironment) {
         self.appState = appState
         configuration = appState.settings
         menuOpenMonitor = appState.itemManager.menuOpenMonitor
-        controlItem.performSetup(with: appState)
+        controlItem.performSetup(with: appState, displayInvalidations: displays.invalidations)
         desiredState = controlItem.state
     }
 
@@ -229,8 +228,8 @@ final class MenuBarSection {
             return
         }
 
-        // Use screenWithMouse to react immediately when switching displays.
-        guard let activeScreen = screen ?? NSScreen.screenWithMouse ?? NSScreen.screenWithActiveMenuBar ?? NSScreen.main else {
+        // Prefer the active menu bar so pointer movement does not change visibility.
+        guard let activeScreen = NSScreen.screenWithActiveMenuBar ?? screen ?? NSScreen.main else {
             controlItem.state = desiredState
             controlItem.applyAppearanceNow()
             return
@@ -238,17 +237,10 @@ final class MenuBarSection {
 
         let displaySettings = appState.settings.displaySettings
         let useThawBar = appState.menuBarManager.shouldUseThawBar(for: activeScreen.displayID)
+        let alwaysShow = !appState.menuBarManager.isZenModeActive
+            && displaySettings.alwaysShowHiddenItems(for: activeScreen.displayID)
 
-        // Apply alwaysShowHiddenItems only when the mouse and active menu bar share a screen.
-        let alwaysShow: Bool = if let menuBarScreen = NSScreen.screenWithActiveMenuBar,
-                                  menuBarScreen.displayID == NSScreen.screenWithMouse?.displayID
-        {
-            displaySettings.alwaysShowHiddenItems(for: menuBarScreen.displayID)
-        } else {
-            false
-        }
-
-        if alwaysShow, !useThawBar {
+        if name != .alwaysHidden, alwaysShow, !useThawBar {
             controlItem.state = .showSection
         } else {
             controlItem.state = desiredState
@@ -304,20 +296,8 @@ final class MenuBarSection {
                 section.updateControlItemState(for: nil)
             }
         }
-        showThawBarOnlyCompanionIfNeeded()
         refreshRevealedItemImages()
         startRehideChecks()
-    }
-
-    /// Inline reveal cannot reach Thaw Bar Only items; show a companion bar that closes with the reveal.
-    private func showThawBarOnlyCompanionIfNeeded() {
-        guard let appState, let menuBarManager,
-              name != .visible,
-              appState.settings.general.showThawBarOnlyWithInlineReveal,
-              !appState.itemManager.thawBarOnlyItems.isEmpty,
-              let screen = screenForThawBar
-        else { return }
-        menuBarManager.thawBarPanel.show(section: .hidden, on: screen, presentation: .alongsideReveal)
     }
 
     /// Capture glyphs while the section is revealed to replace app-icon fallbacks in layout and search.
@@ -353,13 +333,17 @@ final class MenuBarSection {
         }
     }
 
-    func hide() {
-        guard let menuBarManager else {
+    func hide(using manager: MenuBarManager? = nil) {
+        guard let menuBarManager = manager ?? menuBarManager else {
             return
         }
 
         if !isHidden {
-            menuBarManager.sectionController.hideRevealedSections()
+            if menuBarManager.shouldAlwaysShowHiddenItems {
+                menuBarManager.synchronizeAlwaysShowHiddenItems(closingSections: true)
+            } else {
+                menuBarManager.sectionController.hideRevealedSections()
+            }
             menuBarManager.thawBarPanel.close()
         }
         resetClosedPresentationState(using: menuBarManager)
@@ -367,7 +351,7 @@ final class MenuBarSection {
     }
 
     private func resetClosedPresentationState(using menuBarManager: MenuBarManager) {
-        menuBarManager.showOnHoverAllowed = true
+        menuBarManager.showOnHoverAllowed = !menuBarManager.isZenModeActive
         for section in menuBarManager.sections {
             section.desiredState = .hideSection
             section.updateControlItemState(for: nil)
@@ -385,15 +369,10 @@ final class MenuBarSection {
     /// Pointer activity in either bar defers rehide.
     private func isMouseInsideActiveArea() -> Bool {
         guard let appState else { return false }
-        if let screen = appState.hidEventManager.bestScreen(appState: appState),
-           appState.hidEventManager.isMouseInsideMenuBarHoverBand(appState: appState, screen: screen)
-        {
-            return true
-        }
-        if appState.hidEventManager.isMouseInsideThawBar(appState: appState) {
-            return true
-        }
-        return false
+        let hidEventManager = appState.hidEventManager
+        return NSScreen.screens.contains {
+            hidEventManager.isMouseInsideMenuBarHoverBand(appState: appState, screen: $0)
+        } || hidEventManager.isMouseInsideThawBar(appState: appState)
     }
 
     private func startRehideChecks() {
@@ -423,18 +402,8 @@ final class MenuBarSection {
                 guard now - Context.lastTime.withLock({ $0 }) > 0.05 else { return event }
                 Context.lastTime.withLock { $0 = now }
 
-                guard
-                    let self,
-                    let appState,
-                    let screen = NSScreen.main
-                else {
-                    return event
-                }
-                let mouseInActiveArea =
-                    NSEvent.mouseLocation.y >= screen.visibleFrame.maxY ||
-                    appState.hidEventManager.isMouseInsideThawBar(appState: appState)
-
-                if !mouseInActiveArea {
+                guard let self, appState != nil else { return event }
+                if !isMouseInsideActiveArea() {
                     if rehideTask == nil {
                         rehideTask = makeRehideTask(interval: configuration.rehideInterval) { [weak self] in
                             self?.diagLog.debug("Open menu detected - restarting timed rehide task")

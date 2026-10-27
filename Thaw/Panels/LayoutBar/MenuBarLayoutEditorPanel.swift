@@ -98,9 +98,9 @@ final class MenuBarLayoutEditorPanel: NSObject, NSPopoverDelegate {
         return nil
     }
 
-    func performSetup(with appState: AppState) {
+    func performSetup(with appState: AppState, displayInvalidations: some Publisher<Void, Never>) {
         self.appState = appState
-        configureObservers()
+        configureObservers(displayInvalidations: displayInvalidations)
     }
 
     /// usesReorderEditor nil follows the hidden default; the Layout pane's button passes true.
@@ -180,7 +180,7 @@ final class MenuBarLayoutEditorPanel: NSObject, NSPopoverDelegate {
 
     // MARK: Private
 
-    private func configureObservers() {
+    private func configureObservers(displayInvalidations: some Publisher<Void, Never>) {
         var c = Set<AnyCancellable>()
 
         NSApp.publisher(for: \.effectiveAppearance)
@@ -191,20 +191,13 @@ final class MenuBarLayoutEditorPanel: NSObject, NSPopoverDelegate {
 
         // A space switch or a display rearrangement invalidates where the
         // panel is hanging, and, worse, the menu bar it is describing. Take
-        // it down rather than leave a stale editor pinned to nothing.
-        Publishers.Merge(
-            NSWorkspace.shared.notificationCenter.publisher(
-                for: NSWorkspace.activeSpaceDidChangeNotification
-            ),
-            NotificationCenter.default.publisher(
-                for: NSApplication.didChangeScreenParametersNotification
-            )
-        )
-        .sink { [weak self] _ in
-            // The window is not pinned to a bar, so it stays.
-            self?.closePopover()
-        }
-        .store(in: &c)
+        // it down at the posting rather than leave a stale editor pinned to nothing.
+        DisplayEnvironment.spaceOrDisplayChanges(merging: displayInvalidations)
+            .sink { [weak self] in
+                // The window is not pinned to a bar, so it stays.
+                self?.closePopover()
+            }
+            .store(in: &c)
 
         cancellables = c
     }
@@ -280,6 +273,7 @@ private struct MenuBarLayoutEditorContentView: View {
             Button("Done") {
                 onDone?()
             }
+            .buttonStyle(.thawProminent)
             .keyboardShortcut(.defaultAction)
 
             Spacer()

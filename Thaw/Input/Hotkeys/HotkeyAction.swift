@@ -19,12 +19,9 @@ nonisolated enum HotkeyAction: String, Codable, CaseIterable {
     // MARK: Menu Bar Items
 
     /// Summons the search panel, in whichever face
-    /// AdvancedSettings.menuBarSearchPresentation asks for. The Lab palettes
+    /// AdvancedSettings.menuBarSearchPresentation asks for. The item palettes
     /// are modes of this panel, so this is the only way in.
     case searchMenuBarItems = "SearchMenuBarItems"
-
-    /// Opens the small Thaw Bar with every Thaw Bar Only item.
-    case showThawBarOnlyItems = "ShowThawBarOnlyItems"
 
     /// Puts a letter under every item on the menu bar; typing one opens that
     /// item. See ItemHints.
@@ -97,8 +94,6 @@ nonisolated enum HotkeyAction: String, Codable, CaseIterable {
             Task { [provider] in
                 _ = await provider.revealSystemMenuBar()
             }
-        case .showThawBarOnlyItems:
-            appState.thawBarOnlyProxies.toggleThawBarOnlyBar()
         case .showItemHints:
             appState.itemHints.toggle()
         case .enableThawBar:

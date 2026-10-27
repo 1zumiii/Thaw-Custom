@@ -32,19 +32,9 @@ enum MenuBarSearchListContent: View {
     var body: some View {
         switch self {
         case let .header(name):
-            Text(name.localized)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, ThawSpacing.row)
-                .padding(.leading, ThawSpacing.compact)
+            heading(Text(name.localized))
         case let .label(text):
-            Text(text)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, ThawSpacing.row)
-                .padding(.leading, ThawSpacing.compact)
+            heading(Text(text))
         case let .item(item):
             MenuBarItemRow(item: item)
         case let .launcherItem(item, ownerName):
@@ -52,6 +42,15 @@ enum MenuBarSearchListContent: View {
         case let .assistedItem(item, ownerName):
             paletteRow(item, ownerName: ownerName, presentation: .assisted)
         }
+    }
+
+    /// Matches the settings sidebar's group headings.
+    private func heading(_ text: Text) -> some View {
+        ThawListHeading(text)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, ThawSpacing.row)
+            .padding(.bottom, ThawSpacing.tight)
+            .padding(.leading, ThawSpacing.compact)
     }
 
     /// The launcher row at one face's proportions; a face with no rowMetrics
@@ -112,15 +111,8 @@ private struct MenuBarItemPlaceholderIcon: View {
     let length: CGFloat
 
     /// Measured against the accent: white on Thaw's light amber is only 2.1:1.
-    /// The shared foreground switch keeps both sides above 4.58:1.
     private var glyphColor: Color {
-        let accent = Color.accentColor.resolve(in: environment)
-        let luminance = ForegroundContrast.relativeLuminance(
-            linearRed: Double(accent.linearRed),
-            linearGreen: Double(accent.linearGreen),
-            linearBlue: Double(accent.linearBlue)
-        )
-        return ForegroundContrast.prefersDarkContent(onLuminance: luminance) ? .black : .white
+        ThawAccentInk.color(on: .accentColor, in: environment)
     }
 
     var body: some View {

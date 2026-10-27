@@ -45,11 +45,11 @@ enum ControlOrderRules {
         return alwaysHiddenX <= hiddenX && hiddenX <= visibleX
     }
 
-    static nonisolated func trailingSiriIsMisplaced(in items: [MenuBarItem]) -> Bool {
+    static nonisolated func trailingSiriIsMisplaced(in items: [MenuBarItem], displays: [CGRect] = BarAxis.liveDisplayBounds()) -> Bool {
         let onBar = items.filter {
             $0.isOnScreen && $0.bounds.width >= MenuBarItemGeometry.phantomFramePeerMinimumWidth &&
                 !$0.bounds.isEmpty && !$0.bounds.isInfinite &&
-                !$0.isParkedOffMenuBarBand(among: items)
+                !$0.isParkedOffMenuBarBand(among: items, screens: displays)
         }
         guard let siri = onBar.first(where: { $0.tag == .siri }) else { return false }
         return onBar.contains {
@@ -57,11 +57,38 @@ enum ControlOrderRules {
         }
     }
 
+    /// The cached items with the dividers from the last walk put back, since the cache drops them.
+    /// Nil without a known Hidden divider, as nothing can be put in order then.
+    static nonisolated func withDividers(
+        _ cached: [MenuBarItem],
+        _ dividers: ControlItemPair?
+    ) -> (controlItems: ControlItemPair, items: [MenuBarItem])? {
+        guard let dividers else { return nil }
+        let missing = [dividers.hidden, dividers.alwaysHidden].compactMap(\.self).filter { divider in
+            !cached.contains { $0.windowID == divider.windowID }
+        }
+        return (dividers, cached + missing)
+    }
+
+    /// The dividers a reveal's boundary check judges items against. Unless Always Hidden is the
+    /// section shown, its divider is collapsed and macOS doesn't seat it where its weight says.
+    static nonisolated func boundaryControls(
+        _ controlItems: ControlItemPair,
+        revealedSection: MenuBarSection.Name
+    ) -> ControlItemPair {
+        guard revealedSection != .alwaysHidden else { return controlItems }
+        return ControlItemPair(hidden: controlItems.hidden, alwaysHidden: nil)
+    }
+
     /// Whether macOS has parked the Hidden divider off the bar, as it does while
     /// a display reconnects. Which side of a parked divider an item reads on is
     /// meaningless, so no order judged against it may be written.
-    static func dividerIsOffTheBar(_ controlItems: ControlItemPair, among items: [MenuBarItem]) -> Bool {
-        controlItems.hidden.isParkedOffMenuBarBand(among: items)
+    ///
+    /// A stand-in from CacheDividers is never parked: its empty frame only says
+    /// that the cache dropped the divider, not where macOS put it.
+    static func dividerIsOffTheBar(_ controlItems: ControlItemPair, among items: [MenuBarItem], displays: [CGRect] = BarAxis.liveDisplayBounds()) -> Bool {
+        !CacheDividers.isStandIn(controlItems.hidden)
+            && controlItems.hidden.isParkedOffMenuBarBand(among: items, screens: displays)
     }
 
     /// Whether item frames are stated against more than one display's bar.
@@ -69,7 +96,7 @@ enum ControlOrderRules {
     /// macOS 27 draws the item set on every bar, and an app's AX frame names whichever bar
     /// it last laid out on. Frames from different bars share no x axis, so an order read
     /// from them is meaningless. Parked and off-band frames are ignored.
-    static func framesSpanSeveralBars(_ items: [MenuBarItem], displays: [CGRect] = MenuBarItemManager.activeDisplayBounds()) -> Bool {
+    static func framesSpanSeveralBars(_ items: [MenuBarItem], displays: [CGRect] = BarAxis.liveDisplayBounds()) -> Bool {
         let bandHeight = MenuBarItemAXProvider.maxItemHeight(menuBarHeight: NSScreen.tallestCachedMenuBarHeight)
         var bars = Set<Int>()
         for item in items where item.isOnScreen && item.bounds.origin.x != -1 && !item.bounds.isEmpty {
@@ -145,17 +172,24 @@ enum ControlOrderRules {
     /// savedSectionOrder tracks live geometry and pane edits. The controller's
     /// copy misses Command-drags on the real bar, so restoring it would snap
     /// items back to an old order on every reveal.
+    ///
+    /// A drag since the last mirror makes the bar the record, so no order is returned.
     static func freshestRecordedVisibleOrder(
         mirroredOrder: [String]?,
-        controllerOrder: [String]?
+        controllerOrder: [String]?,
+        userDraggedSinceMirror: Bool = false
     ) -> [String] {
-        mirroredOrder ?? controllerOrder ?? []
+        if userDraggedSinceMirror {
+            return []
+        }
+        return mirroredOrder ?? controllerOrder ?? []
     }
 
     /// Reject reversed Control Center/Clock ranks or non-anchors right of the trailing group; normalization repairs stable Siri stranding.
     /// Skip Thaw controls and sub-phantomFramePeerMinimumWidth slivers (including the intentionally zero-width icon); ranks also cover legacy spellings.
     static nonisolated func anchoredTrailingViolation(
-        in sortedLeftToRight: [MenuBarItem]
+        in sortedLeftToRight: [MenuBarItem],
+        displays: [CGRect] = BarAxis.liveDisplayBounds()
     ) -> String? {
         var lastAnchoredRank = Int.min
         var sawAnchored = false
@@ -163,7 +197,7 @@ enum ControlOrderRules {
             // A concealed item's parked or phantom frame says nothing about the bar's order.
             guard !item.isControlItem,
                   item.bounds.width >= MenuBarItemGeometry.phantomFramePeerMinimumWidth,
-                  !item.isParkedOffMenuBarBand(among: sortedLeftToRight),
+                  !item.isParkedOffMenuBarBand(among: sortedLeftToRight, screens: displays),
                   !item.hasPhantomFrame(among: sortedLeftToRight)
             else {
                 continue

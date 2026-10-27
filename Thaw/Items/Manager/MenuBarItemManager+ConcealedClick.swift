@@ -24,9 +24,8 @@ extension MenuBarItemManager {
         with mouseButton: CGMouseButton,
         on displayID: CGDirectDisplayID
     ) async -> MenuBarItemActivationOutcome {
-        guard let controller = appState?.menuBarManager.sectionController else {
-            return .activationFailed
-        }
+        repairs.interruptAutomaticWork(by: .userClickedItem)
+        guard let controller = appState?.menuBarManager.sectionController else { return .activationFailed }
 
         // Opening an item on another display activates it; the repair pass must
         // not read that as a topology change.
@@ -37,9 +36,7 @@ extension MenuBarItemManager {
         // A visible-authored item can still be concealed by the automatic-overflow
         // set, which hides it through the same assertion the hidden sections use.
         let section = controller.section(for: item)
-        let isEffectivelyConcealed = controller.effectivelyConcealedIdentifiers.contains(
-            MenuBarItemTag.canonicalPersistentIdentifier(item.uniqueIdentifier)
-        )
+        let isEffectivelyConcealed = controller.isEffectivelyConcealed(item)
         // A visible item macOS is not drawing cannot be clicked where its
         // frame says it is; that seat belongs to something else.
         let isNotShown = itemsNotShownOnBarTags.contains(item.tag)
@@ -96,7 +93,7 @@ extension MenuBarItemManager {
         // Only a method that never reached the owner hands over to the next:
         // one the owner took may have acted unseen, and repeating it would undo a toggle.
         let identity = openMethodIdentity(for: item)
-        let learned = learnedOpenMethod(for: identity)
+        let learned = LearnedOpenMethods.standard.method(for: identity)
         let showInMenuBar = appState?.settings.general.openHiddenItemsInMenuBar ?? false
         let unverified = recentUnverifiedOpenMethods(for: identity)
         for method in ConcealedItemOpenMethod.openMethodOrder(
@@ -106,8 +103,8 @@ extension MenuBarItemManager {
             unverified: unverified
         ) {
             let attempt = switch method {
-            case .pressInPlace:
-                await pressConcealedItemInPlace(item)
+            case .pressInPlace, .showMenuInPlace:
+                await pressConcealedItemInPlace(item, method: method)
             case .revealInPlace:
                 await revealInPlaceAndClick(item: item, with: mouseButton, on: displayID, controller: controller)
             case .clickInPlace:
@@ -126,7 +123,7 @@ extension MenuBarItemManager {
                 )
                 menusOpenedByClick[key] = ownerMenuWindowIDs(item).subtracting(menusBefore)
                 unverifiedOpenMethods[identity.key] = nil
-                rememberOpenMethod(method, for: identity)
+                LearnedOpenMethods.standard.record(method, for: identity, clickedWith: mouseButton)
                 return .completed(reactionObserved: true)
             case .deliveredUnobserved:
                 // Show the real icon for the temporary-show interval: the user
@@ -146,7 +143,7 @@ extension MenuBarItemManager {
 
         // Nothing reached it. Leave it in the bar for the temporary-show
         // interval so the user can click the real icon.
-        forgetOpenMethod(for: identity)
+        LearnedOpenMethods.standard.record(nil, for: identity, clickedWith: mouseButton)
         MenuBarItemManager.diagLog.warning(
             "clickConcealedItem: no method reached \(item.logString); leaving it shown in the menu bar"
         )
@@ -181,7 +178,15 @@ extension MenuBarItemManager {
     /// Presses the item's AX element without revealing it. Returns whether the
     /// owner reacted. The extras-bar press is frame-matched, so it goes first;
     /// the hosted press covers MenuBarAgent's parked, frameless elements.
-    private func pressConcealedItemInPlace(_ item: MenuBarItem) async -> ConcealedItemOpenAttempt {
+    private func pressConcealedItemInPlace(
+        _ item: MenuBarItem,
+        method: ConcealedItemOpenMethod = .pressInPlace
+    ) async -> ConcealedItemOpenAttempt {
+        if method == .showMenuInPlace {
+            // A right-click menu is no toggle, so a menu not seen opening may
+            // hand over to the reveal.
+            return await InPlaceMenuOpener.showMenu(for: item, pid: resolvedPID(for: item)) ? .reacted : .notDelivered
+        }
         let snapshot = ClickReactionVerifier.snapshot(for: item)
         let ownPress = await pressItemViaAccessibility(item)
         var pressed = ownPress
@@ -194,7 +199,7 @@ extension MenuBarItemManager {
             )
             return .notDelivered
         }
-        let reaction = await ClickReactionVerifier.verify(against: snapshot)
+        let reaction = await ClickReactionVerifier.verifyAllowingLateOpen(against: snapshot)
         MenuBarItemManager.diagLog.debug(
             "pressInPlace: pressed \(item.logString) via \(ownPress ? "own bar" : "hosted"); reacted=\(reaction.didReact)"
         )

@@ -17,4 +17,7 @@ public enum ThawInk {
     /// Supporting copy such as captions and annotations: 5.45:1 light,
     /// 6.02:1 dark.
     public static let supporting = Color.primary.opacity(0.7)
+
+    /// Opacity for a disabled hand-drawn control.
+    public static let disabledOpacity = 0.5
 }

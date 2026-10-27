@@ -120,13 +120,7 @@ extension DisplaySettingsPane {
         )
 
         LabeledContent {
-            ThawSlider(
-                value: sliderBinding,
-                in: -16 ... 16,
-                step: 2
-            ) {
-                spacingValueLabel(draft)
-            }
+            SpacingSlider(value: sliderBinding) { spacingValueLabel(draft) }
         } label: {
             LabeledContent {
                 // Reset acts on the saved value, so it stays available without a pending draft.
@@ -236,7 +230,7 @@ extension DisplaySettingsPane {
             Button("Apply") {
                 requestSpacingApply(for: display, offset: Double(draft))
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.thawProminent)
             .controlSize(.small)
             .help(Text("Apply the spacing for this display"))
         }

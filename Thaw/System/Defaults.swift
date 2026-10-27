@@ -120,13 +120,11 @@ nonisolated enum Defaults {
             .customThawIconIsTemplate: DefaultValue.customThawIconIsTemplate,
             .simpleMode: DefaultValue.simpleMode,
             .showSettingDescriptions: DefaultValue.showSettingDescriptions,
+            .simpleModeShowsPreview: DefaultValue.simpleModeShowsPreview,
             .lockThawBarPosition: DefaultValue.lockThawBarPosition,
-            .enableThawBarOnly: DefaultValue.enableThawBarOnly,
             .openHiddenItemsInMenuBar: DefaultValue.openHiddenItemsInMenuBar,
             .roundScreenCorners: DefaultValue.roundScreenCorners,
             .screenCornerRadius: DefaultValue.screenCornerRadius,
-            .showThawBarOnlyWithInlineReveal: DefaultValue.showThawBarOnlyWithInlineReveal,
-            .showThawBarOnlyLauncher: DefaultValue.showThawBarOnlyLauncher,
             .useThawBar: DefaultValue.useThawBar,
             .useThawBarOnlyOnNotchedDisplay: DefaultValue.useThawBarOnlyOnNotchedDisplay,
             .useNativeAlwaysHide: DefaultValue.useNativeAlwaysHide,
@@ -144,6 +142,7 @@ nonisolated enum Defaults {
             .showAllSectionsOnUserDrag: DefaultValue.showAllSectionsOnUserDrag,
             .newItemsSection: DefaultValue.newItemsSection,
             .sectionDividerStyle: DefaultValue.sectionDividerStyle.rawValue,
+            .customSectionDividerIsTemplate: DefaultValue.customSectionDividerIsTemplate,
             .hideApplicationMenus: DefaultValue.hideApplicationMenus,
             .enableSecondaryContextMenu: DefaultValue.enableSecondaryContextMenu,
             .showOnHoverDelay: DefaultValue.showOnHoverDelay,
@@ -151,11 +150,9 @@ nonisolated enum Defaults {
             .tooltipDelay: DefaultValue.tooltipDelay,
             .showMenuBarTooltips: DefaultValue.showMenuBarTooltips,
             .iconRefreshInterval: DefaultValue.iconRefreshInterval,
-            .menuBarItemAlertRevealCooldown: DefaultValue.menuBarItemAlertRevealCooldown,
             .autoZenWhileSharingScreen: DefaultValue.autoZenWhileSharingScreen,
             .enableDiagnosticLogging: DefaultValue.enableDiagnosticLogging,
             .enableMenuBarItemOverflow: DefaultValue.enableMenuBarItemOverflow,
-            .enableExperimentalSystemItemHiding: DefaultValue.enableExperimentalSystemItemHiding,
             .menuBarArrangementMode: DefaultValue.menuBarArrangementMode.rawValue,
             .enableExperimentalOverflowPrevention: DefaultValue.enableExperimentalOverflowPrevention,
             .alwaysUseAppIconForMenuBarItems: DefaultValue.alwaysUseAppIconForMenuBarItems,
@@ -182,16 +179,14 @@ nonisolated enum Defaults {
 
             // Search
             .rememberSearchQuery: DefaultValue.rememberSearchQuery,
-            .searchSectionOrder: DefaultValue.searchSectionOrder,
-            .searchIncludeVisible: DefaultValue.searchIncludeVisible,
-            .searchIncludeHidden: DefaultValue.searchIncludeHidden,
-            .searchIncludeAlwaysHidden: DefaultValue.searchIncludeAlwaysHidden,
             .menuBarSearchPresentation: DefaultValue.menuBarSearchPresentation.rawValue,
 
             // Display Settings
             .confirmSpacingRelaunch: DefaultValue.confirmSpacingRelaunch,
             .unconfirmedSpacingProfileScope: DefaultValue.unconfirmedSpacingProfileScope.rawValue,
             .spacingApplyMode: DefaultValue.spacingApplyMode.rawValue,
+            .showEveryItemOnWideDisplays: DefaultValue.showEveryItemOnWideDisplays,
+            .wideDisplayMinimumWidth: DefaultValue.wideDisplayMinimumWidth,
 
             // Event Delivery
             .axMessagingTimeout: DefaultValue.axMessagingTimeout,
@@ -232,13 +227,11 @@ extension Defaults {
         static let customThawIconIsTemplate = false
         static let simpleMode = false
         static let showSettingDescriptions = true
+        static let simpleModeShowsPreview = true
         static let lockThawBarPosition = true
-        static let enableThawBarOnly = true
         static let openHiddenItemsInMenuBar = false
         static let roundScreenCorners = false
         static let screenCornerRadius = 10.0
-        static let showThawBarOnlyWithInlineReveal = false
-        static let showThawBarOnlyLauncher = true
         static let useThawBar = false
         static let useThawBarOnlyOnNotchedDisplay = false
 
@@ -262,6 +255,7 @@ extension Defaults {
         static let newItemsSection = "hidden"
         static let newItemsPlacementData: Data? = nil
         static let sectionDividerStyle: SectionDividerStyle = .noDivider
+        static let customSectionDividerIsTemplate = true
         static let hideApplicationMenus = true
         static let enableSecondaryContextMenu = true
         static let showOnHoverDelay: TimeInterval = 0.2
@@ -270,7 +264,6 @@ extension Defaults {
         static let showMenuBarTooltips = false
         static let iconRefreshInterval: TimeInterval = 0.25
         /// Minimum seconds between two alert reveals of the same item.
-        static let menuBarItemAlertRevealCooldown: TimeInterval = 45
         static let autoZenWhileSharingScreen = false
         #if DEBUG
             static let enableDiagnosticLogging = true
@@ -278,7 +271,6 @@ extension Defaults {
             static let enableDiagnosticLogging = false
         #endif
         static let enableMenuBarItemOverflow = false
-        static let enableExperimentalSystemItemHiding = false
         static let menuBarArrangementMode = MenuBarArrangementMode.automatic
         static let enableExperimentalOverflowPrevention = false
         static let alwaysUseAppIconForMenuBarItems = false
@@ -293,6 +285,9 @@ extension Defaults {
         /// Stand-ins for Apple menu extras Thaw removes while they sit in a
         /// hidden section. Each is off by default and independent of the others.
         static let enableModuleStandIns = false
+        /// The Control Center modules left as Apple's own while the others are
+        /// replaced, by stand-in raw value. Empty replaces all four.
+        static let skippedModuleStandIns: [String] = []
         static let enableTimeMachineTakeover = false
         static let enableTimerTakeover = false
         static let enableTextInputTakeover = false
@@ -316,10 +311,6 @@ extension Defaults {
         // MARK: Search
 
         static let rememberSearchQuery = false
-        static let searchSectionOrder: [String] = ["visible", "hidden", "alwaysHidden"]
-        static let searchIncludeVisible = true
-        static let searchIncludeHidden = true
-        static let searchIncludeAlwaysHidden = true
         /// How the menu bar search panel opens. Stored as the case's raw
         /// value; the default is the behavior the panel shipped with.
         static let menuBarSearchPresentation = SearchPresentation.inspector
@@ -339,6 +330,8 @@ extension Defaults {
         static let confirmSpacingRelaunch = true
         static let unconfirmedSpacingProfileScope: SpacingProfileSaveScope = .activeProfile
         static let spacingApplyMode: SpacingApplyMode = .relaunchApps
+        static let showEveryItemOnWideDisplays = false
+        static let wideDisplayMinimumWidth: Double = 2560
 
         // MARK: Event Delivery
 
@@ -384,19 +377,17 @@ extension Defaults {
         case customThawIconIsTemplate = "CustomIceIconIsTemplate"
         case simpleMode = "SimpleMode"
         case showSettingDescriptions = "ShowSettingDescriptions"
+        case simpleModeShowsPreview = "SimpleModeShowsPreview"
         case lastSettingsPane = "LastSettingsPane"
         case hiddenSidebarPanes = "HiddenSidebarPanes"
+        case settingsInOwnProcess = "SettingsInOwnProcess"
         case menuBarItemAlertReveals = "MenuBarItemAlertReveals"
-        case menuBarItemAlertRevealCooldown = "MenuBarItemAlertRevealCooldown"
         case autoZenWhileSharingScreen = "AutoZenWhileSharingScreen"
         case menuBarAppearanceSpaceOverrides = "MenuBarAppearanceSpaceOverrides"
         case lockThawBarPosition = "LockThawBarPosition"
-        case enableThawBarOnly = "EnableThawBarOnly"
         case openHiddenItemsInMenuBar = "OpenHiddenItemsInMenuBar"
         case roundScreenCorners = "RoundScreenCorners"
         case screenCornerRadius = "ScreenCornerRadius"
-        case showThawBarOnlyWithInlineReveal = "ShowThawBarOnlyWithInlineReveal"
-        case showThawBarOnlyLauncher = "ShowThawBarOnlyLauncher"
         case menuBarSpacers = "MenuBarSpacers"
         case enableExperimentalRevealSystemExtras = "EnableExperimentalRevealSystemExtras"
         case useThawBar = "UseIceBar"
@@ -415,6 +406,8 @@ extension Defaults {
         case confirmSpacingRelaunch = "ConfirmSpacingRelaunch"
         case unconfirmedSpacingProfileScope = "UnconfirmedSpacingProfileScope"
         case spacingApplyMode = "SpacingApplyMode"
+        case showEveryItemOnWideDisplays = "ShowEveryItemOnWideDisplays"
+        case wideDisplayMinimumWidth = "WideDisplayMinimumWidth"
 
         // MARK: Hotkeys Settings
 
@@ -430,6 +423,8 @@ extension Defaults {
         case newItemsSection = "NewItemsSection"
         case newItemsPlacementData = "NewItemsPlacementData"
         case sectionDividerStyle = "SectionDividerStyle"
+        case customSectionDividerImage = "CustomSectionDividerImage"
+        case customSectionDividerIsTemplate = "CustomSectionDividerIsTemplate"
         case hideApplicationMenus = "HideApplicationMenus"
         case enableSecondaryContextMenu = "EnableSecondaryContextMenu"
         case showOnHoverDelay = "ShowOnHoverDelay"
@@ -451,8 +446,7 @@ extension Defaults {
         /// XPC helper instead of in-process ScreenCaptureKit, containing
         /// SkyLight's per-call dictionary leak in a bounded-lifetime helper.
         ///
-        /// Hidden diagnostic flag; not exposed in Settings. Default: false
-        /// until the helper's TCC attribution proves out on macOS 27.
+        /// Hidden diagnostic flag; not exposed in Settings. Default: true.
         case captureViaXPCService = "CaptureViaXPCService"
         /// Hidden diagnostic flag: route the ambient menu bar walk through the AX helper.
         case axEnumerationViaSubprocess = "AXEnumerationViaSubprocess"
@@ -490,6 +484,7 @@ extension Defaults {
         /// Per-extra stand-ins. Read live so flipping one reconciles only the
         /// extra it names.
         case enableModuleStandIns = "EnableModuleStandIns"
+        case skippedModuleStandIns = "SkippedModuleStandIns"
         case enableTimeMachineTakeover = "EnableTimeMachineTakeover"
         case enableTimerTakeover = "EnableTimerTakeover"
         case enableTextInputTakeover = "EnableTextInputTakeover"
@@ -514,10 +509,6 @@ extension Defaults {
 
         case rememberSearchQuery = "RememberSearchQuery"
         case menuBarSearchRecents = "MenuBarSearchRecents"
-        case searchSectionOrder = "SearchSectionOrder"
-        case searchIncludeVisible = "SearchIncludeVisible"
-        case searchIncludeHidden = "SearchIncludeHidden"
-        case searchIncludeAlwaysHidden = "SearchIncludeAlwaysHidden"
         /// Where the search panel opens: remembered, centered, or at the
         /// pointer. Stored as the SearchPresentation case's raw value.
         case menuBarSearchPresentation = "MenuBarSearchPresentation"
@@ -584,7 +575,7 @@ extension Defaults {
         /// HID stream, avoiding the cursor warp. MenuBarAgent is resolved by
         /// name, since ownerPID is the third-party app.
         ///
-        /// Hidden diagnostic flag; not exposed in Settings. Default: false.
+        /// Hidden diagnostic flag; not exposed in Settings. Default: true.
         case addressMoveDragToMenuBarAgent
 
         /// Whether the first synthetic-drag attempt is delivered as event
@@ -653,6 +644,12 @@ extension Defaults {
 
         case hasSeenUpdateConsent
 
+        // MARK: Native Hiding
+
+        /// The user answered the one-time offer to show apps an older
+        /// version may have left switched off in System Settings.
+        case hasAnsweredHiddenAppsRestoreOffer
+
         // MARK: Onboarding
 
         case hasSeenOnboarding
@@ -677,5 +674,7 @@ extension Defaults {
 
         case globalPreProfileHook = "GlobalPreProfileHook"
         case globalPostProfileHook = "GlobalPostProfileHook"
+        case lastSettledProfileID = "LastSettledProfileID"
+        case lastActiveProfileID = "LastActiveProfileID"
     }
 }

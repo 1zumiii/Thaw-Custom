@@ -29,7 +29,7 @@ struct ThawBarSettingsPane: View {
     /// page opens on something real the user can act on.
     @State private var editingContext: EditingContext = .template
 
-    @State private var isOptionsExpanded = false
+    @State private var tab = ThawBarTab.display
 
     @State private var hasChosenContext = false
 
@@ -48,16 +48,23 @@ struct ThawBarSettingsPane: View {
                 )
             }
 
-            contextPicker
+            SettingsPaneTabs(
+                selection: $tab,
+                tabs: ThawBarTab.allCases,
+                tabForSection: ThawBarTab.init(section:)
+            )
 
-            configurationControls(for: editingContext)
-
-            // The look sits beside the preview it changes; it applies on
-            // every display.
-            ThawBarAppearanceEditor(configuration: Bindable(appState.appearanceManager).configuration)
-
-            DisclosureGroup("Options for all displays", isExpanded: $isOptionsExpanded) {
-                appWideOptions
+            switch tab {
+            case .display:
+                contextPicker
+                configurationControls(for: editingContext)
+            case .look:
+                // The look sits under the preview it changes; it applies on every display.
+                ThawBarAppearanceEditor(configuration: Bindable(appState.appearanceManager).configuration)
+            case .allDisplays:
+                ThawSection("Options for all displays") {
+                    appWideOptions
+                }
             }
         }
         .onAppear {
@@ -71,12 +78,6 @@ struct ThawBarSettingsPane: View {
                 editingContext = .display(first.id)
             }
             hasChosenContext = true
-            if SettingsSearchNavigation.consumeDisclosure(
-                .thawBarAppWideOptions,
-                navigationState: appState.navigationState
-            ) {
-                isOptionsExpanded = true
-            }
         }
     }
 
@@ -319,7 +320,7 @@ struct ThawBarSettingsPane: View {
     // MARK: - App-wide options
 
     /// The app-wide toggles: position lock, open-at-pointer-when-summoned-by-
-    /// hotkey, where hidden items open, and Thaw Bar Only.
+    /// hotkey, and where hidden items open.
     @ViewBuilder
     private var appWideOptions: some View {
         Toggle(
@@ -348,35 +349,33 @@ struct ThawBarSettingsPane: View {
             )
         )
         .annotation("Clicking a hidden item shows it in the menu bar and opens its menu under the icon. Turn off to open the menu without showing the icon.")
+    }
+}
 
-        // Thaw Bar Only is unplugged for now; restore this with the gate in MenuBarItemManager+ThawBarOnly.swift.
-        // Toggle(
-        //     "Thaw Bar Only",
-        //     isOn: Binding(
-        //         get: { appState.settings.general.enableThawBarOnly },
-        //         set: { appState.settings.general.enableThawBarOnly = $0 }
-        //     )
-        // )
-        // .annotation("Items macOS won't show in the menu bar stay in the \(Constants.displayName) Bar. Turn this off to treat them as ordinary hidden items. Your list comes back when you turn it on again.")
+nonisolated enum ThawBarTab: CaseIterable, ThawTab {
+    case display
+    case look
+    case allDisplays
 
-        // Toggle(
-        //     "Menu bar icon for Thaw Bar Only items",
-        //     isOn: Binding(
-        //         get: { appState.settings.general.showThawBarOnlyLauncher },
-        //         set: { appState.settings.general.showThawBarOnlyLauncher = $0 }
-        //     )
-        // )
-        // .annotation("Shows an icon in the menu bar while there are Thaw Bar Only items. Click it to open a small \(Constants.displayName) Bar with just those items.")
-        // .disabled(!appState.settings.general.enableThawBarOnly)
+    /// The tab holding a search result's section.
+    init?(section: String) {
+        guard section == "Options for all displays" else { return nil }
+        self = .allDisplays
+    }
 
-        // Toggle(
-        //     "Show Thaw Bar Only items when showing hidden items",
-        //     isOn: Binding(
-        //         get: { appState.settings.general.showThawBarOnlyWithInlineReveal },
-        //         set: { appState.settings.general.showThawBarOnlyWithInlineReveal = $0 }
-        //     )
-        // )
-        // .annotation("When you show hidden items, the items kept in the \(Constants.displayName) Bar appear in a small \(Constants.displayName) Bar below the menu bar.")
-        // .disabled(!appState.settings.general.enableThawBarOnly)
+    var title: LocalizedStringKey {
+        switch self {
+        case .display: "Display"
+        case .look: "Look"
+        case .allDisplays: "All Displays"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .display: "display"
+        case .look: "paintbrush"
+        case .allDisplays: "rectangle.on.rectangle"
+        }
     }
 }

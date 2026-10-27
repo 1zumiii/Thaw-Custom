@@ -14,45 +14,6 @@ extension HIDEventManager {
     /// Anything wider is an expanded section divider and is excluded.
     static nonisolated let maxReasonableItemWidth: CGFloat = 500
 
-    /// macOS 27 concealed items can keep phantom AX frames far below the bar;
-    /// those must not count as items in hit-testing.
-    static nonisolated let maxMenuBarItemMidY: CGFloat = MenuBarItemGeometry.maxOnBarMidY
-
-    /// On macOS 27 synthetic window IDs have no live CG window, so cached AX
-    /// bounds are trusted. Item frames are reported against one bar, so each
-    /// entry is rebased onto destinationDisplay first (see MirroredBarGeometry).
-    static nonisolated func menuBarBoundsLookupContains(
-        _ location: CGPoint,
-        entries: [(windowID: CGWindowID, bounds: CGRect)],
-        destinationDisplay: CGRect?,
-        displayBounds: [CGRect],
-        laneMinX: CGFloat? = nil,
-        trustCachedBoundsWithoutLiveWindowVerification: Bool,
-        liveWindowBounds: (CGWindowID) -> CGRect? = { Bridging.getWindowBounds(for: $0) }
-    ) -> Bool {
-        for entry in entries {
-            guard let bounds = MirroredBarGeometry.drawnFrame(
-                entry.bounds,
-                on: destinationDisplay,
-                displayBounds: displayBounds,
-                laneMinX: laneMinX
-            ), bounds.contains(location) else { continue }
-            if trustCachedBoundsWithoutLiveWindowVerification {
-                return true
-            }
-            if let currentBounds = liveWindowBounds(entry.windowID),
-               MirroredBarGeometry.frame(
-                   currentBounds,
-                   on: destinationDisplay,
-                   displayBounds: displayBounds
-               ).contains(location)
-            {
-                return true
-            }
-        }
-        return false
-    }
-
     /// AX can overstate the digital clock's height. Clip both native and
     /// mirrored frames to the destination bar, never the application below it.
     static nonisolated func systemClockItem(
@@ -109,12 +70,13 @@ extension HIDEventManager {
     static nonisolated func shouldIncludeItemInMenuBarBoundsLookup(
         _ item: MenuBarItem,
         section: MenuBarSection.Name?,
-        effectivelyConcealed: Set<String> = []
+        effectivelyConcealed: Set<String> = [],
+        screens: [CGRect]
     ) -> Bool {
         guard item.bounds.width > 0, item.bounds.width <= maxReasonableItemWidth else {
             return false
         }
-        guard item.bounds.midY <= maxMenuBarItemMidY else {
+        guard MenuBarItemGeometry.barScreen(holding: item.bounds, among: screens) != nil else {
             return false
         }
         if item.tag.isNativeOverflowControl {
@@ -124,9 +86,7 @@ extension HIDEventManager {
             return true
         }
         if section != .visible, !item.isNonConcealableSystemItem {
-            return !effectivelyConcealed.contains(
-                MenuBarItemTag.canonicalPersistentIdentifier(item.uniqueIdentifier)
-            )
+            return !ItemConcealment.isConcealed(item.uniqueIdentifier, in: effectivelyConcealed)
         }
         return true
     }
@@ -161,15 +121,17 @@ extension HIDEventManager {
 
     /// Reads the concealed set once per rebuild, not once per item.
     private func boundsLookupInclusionFilter() -> (MenuBarItem) -> Bool {
+        let screens = BarAxis.liveDisplayBounds()
         guard let controller = appState?.menuBarManager.sectionController else {
-            return { Self.shouldIncludeItemInMenuBarBoundsLookup($0, section: nil) }
+            return { Self.shouldIncludeItemInMenuBarBoundsLookup($0, section: nil, screens: screens) }
         }
         let effectivelyConcealed = controller.effectivelyConcealedIdentifiers
         return { item in
             Self.shouldIncludeItemInMenuBarBoundsLookup(
                 item,
                 section: controller.section(for: item),
-                effectivelyConcealed: effectivelyConcealed
+                effectivelyConcealed: effectivelyConcealed,
+                screens: screens
             )
         }
     }

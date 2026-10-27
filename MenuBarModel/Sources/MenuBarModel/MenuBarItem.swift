@@ -179,34 +179,40 @@ public struct MenuBarItem: CustomStringConvertible, Sendable, Codable {
         return false
     }
 
+    /// The lowest a live bar item's frame centre sits relative to its display's top edge.
+    public static let maxBarBandMidY: CGFloat = 80
+
     /// Whether AX reports this item parked outside the live bar. During
     /// assertion reflows macOS 27 parks items around y 1400 with a hidden-side
     /// X, which would falsely trigger divergence detection and reorders.
     ///
-    /// The absolute Y check comes first: when the visible control parks too,
-    /// a peer-relative check would call everyone on-band.
+    /// The display's band check comes first: when the visible control parks
+    /// too, a peer-relative check would call everyone on-band.
     public func isParkedOffMenuBarBand(among peers: [MenuBarItem]) -> Bool {
-        guard bounds.width > 0, bounds.height > 0 else { return true }
+        isParkedOffMenuBarBand(among: peers, screens: BarAxis.liveDisplayBounds())
+    }
 
-        // A parked item reports the leading-edge sentinel (origin.x == -1) in
-        // the bar's own Y band, so the Y checks below miss it.
-        if bounds.origin.x == -1 {
-            return true
+    /// Whether this item is parked outside the bar bands of the given CG-global screens.
+    /// References are seated controls on the same screen. With no screens, the band is measured from y = 0.
+    public func isParkedOffMenuBarBand(among peers: [MenuBarItem], screens: [CGRect]) -> Bool {
+        guard bounds.width > 0, bounds.height > 0, bounds.origin.x != -1 else { return true }
+
+        func barIndex(holding frame: CGRect) -> Int? {
+            guard !screens.isEmpty else {
+                return frame.midY <= Self.maxBarBandMidY ? 0 : nil
+            }
+            guard frame.width > 0, frame.height > 0, frame.origin.x != -1 else { return nil }
+            let centre = CGPoint(x: frame.midX, y: frame.midY)
+            return screens.firstIndex { screen in
+                screen.contains(centre) && frame.midY - screen.minY <= Self.maxBarBandMidY
+            }
         }
 
-        // Live bar items sit in the top 60 pt or so of the hosting-window space.
-        if bounds.midY > 80 {
-            return true
-        }
-
-        guard let barMidY = peers.first(where: {
-            $0.tag.matchesVisibleControlItem && $0.bounds.midY <= 80
-        })?.bounds.midY
-            ?? peers.first(where: {
-                $0.isControlItem && $0.bounds.width > 8 && $0.bounds.midY <= 80
-            })?.bounds.midY
+        guard let index = barIndex(holding: bounds) else { return true }
+        let seated = peers.lazy.filter { barIndex(holding: $0.bounds) == index }
+        guard let barMidY = seated.first(where: { $0.tag.matchesVisibleControlItem })?.bounds.midY
+            ?? seated.first(where: { $0.isControlItem && $0.bounds.width > 8 })?.bounds.midY
         else { return false }
-        // The live band is about 30 pt; parked items are 1000+ pt away on Y.
         return abs(bounds.midY - barMidY) > 48
     }
 
@@ -261,12 +267,6 @@ public struct MenuBarItem: CustomStringConvertible, Sendable, Codable {
 
     /// Ignores any custom name, which lives in the app target.
     public var autoDetectedName: String {
-        /// Converts "UpperCamelCase" to "Title Case", but leaves a single
-        /// lowercase letter before an uppercase one alone ("WiFi").
-        func toTitleCase(_ s: some StringProtocol) -> String {
-            String(s).replacing(/([a-z]{2})([A-Z])/) { $0.output.1 + " " + $0.output.2 }
-        }
-
         guard !isControlItem else {
             return ThawMenuBarIdentity.displayName
         }
@@ -287,18 +287,18 @@ public struct MenuBarItem: CustomStringConvertible, Sendable, Codable {
                 if let moduleName = SystemMenuBarModuleCatalog.moduleName(matching: candidate) {
                     // Keep human AX titles ("Wi-Fi"); map opaque IDs to catalog names.
                     let useCatalogName = candidate.hasPrefix("com.apple.") || candidate.hasPrefix("BentoBox")
-                    return toTitleCase(useCatalogName ? moduleName : candidate)
+                    return Self.titleCased(useCatalogName ? moduleName : candidate)
                 }
             }
             if let preferredTitle, let match = preferredTitle.prefixMatch(of: /Hearing/) {
-                return toTitleCase(match.output)
+                return Self.titleCased(match.output)
             }
             if let preferredTitle = significant(preferredTitle) {
                 if preferredTitle.hasPrefix("com.apple.menuextra.") {
                     let suffix = preferredTitle.dropFirst("com.apple.menuextra.".count)
-                    return toTitleCase(suffix.replacing("-", with: " "))
+                    return Self.titleCased(suffix.replacing("-", with: " "))
                 }
-                return toTitleCase(preferredTitle)
+                return Self.titleCased(preferredTitle)
             }
             if let identity = significant(tag.title) {
                 // A Control Center control that published no description falls
@@ -306,7 +306,7 @@ public struct MenuBarItem: CustomStringConvertible, Sendable, Codable {
                 if let chrono = ChronoControlIdentity(axIdentifier: identity) {
                     return chrono.derivedDisplayName
                 }
-                return toTitleCase(identity)
+                return Self.titleCased(identity)
             }
             return fallbackName
         }
@@ -334,12 +334,16 @@ public struct MenuBarItem: CustomStringConvertible, Sendable, Codable {
             guard let component = bundleIdentifier.split(separator: ".").last else {
                 return nil
             }
-            return toTitleCase(component.prefix(1).uppercased() + component.dropFirst())
+            return Self.titleCased(component.prefix(1).uppercased() + component.dropFirst())
         }
 
         guard let sourceApplication else {
             if tag.namespace == .menuBarAgent {
                 return menuBarAgentDisplayName(preferredTitle: title)
+            }
+            // A restored hidden item has no PID, and its tag still names it.
+            if tag.namespace == .systemUIServer, let title {
+                return Self.systemUIServerDisplayName(title: title, tagTitle: tag.title)
             }
             return namespaceDerivedName ?? fallbackName
         }
@@ -369,21 +373,17 @@ public struct MenuBarItem: CustomStringConvertible, Sendable, Codable {
 
         let displayName = switch tag.namespace {
         case .passwords, .weather, .textInputMenuAgent:
-            toTitleCase(bestName.replacing(/Menu.*/, with: ""))
+            Self.titleCased(bestName.replacing(/Menu.*/, with: ""))
         case .menuBarAgent:
             menuBarAgentDisplayName(preferredTitle: title)
         case .controlCenter:
             if let match = title.prefixMatch(of: /Hearing/) {
-                toTitleCase(match.output)
+                Self.titleCased(match.output)
             } else {
-                toTitleCase(title)
+                Self.titleCased(title)
             }
         case .systemUIServer:
-            if let match = title.firstMatch(of: /TimeMachine/) {
-                toTitleCase(match.output)
-            } else {
-                toTitleCase(title)
-            }
+            Self.systemUIServerDisplayName(title: title, tagTitle: tag.title)
         default:
             bestName
         }
@@ -440,5 +440,21 @@ extension MenuBarItem: Hashable {
         hasher.combine(bounds.size.height)
         hasher.combine(title)
         hasher.combine(isOnScreen)
+    }
+}
+
+extension MenuBarItem {
+    /// Splits a camel-cased name into words, as in "TimeMachine" to "Time Machine". A single lowercase letter before a capital stays joined ("WiFi").
+    static func titleCased(_ s: some StringProtocol) -> String {
+        String(s).replacing(/([a-z]{2})([A-Z])/) { $0.output.1 + " " + $0.output.2 }
+    }
+
+    /// A SystemUIServer item's name. On macOS 27 Time Machine's live title can be
+    /// a bare "Item-0", so its identity in the tag names it when the title doesn't.
+    static func systemUIServerDisplayName(title: String, tagTitle: String) -> String {
+        if let match = title.firstMatch(of: /TimeMachine/) ?? tagTitle.firstMatch(of: /TimeMachine/) {
+            return titleCased(match.output)
+        }
+        return titleCased(title)
     }
 }

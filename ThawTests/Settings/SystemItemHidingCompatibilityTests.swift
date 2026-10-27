@@ -9,172 +9,153 @@ import Foundation
 import Testing
 @testable import Thaw
 
+/// Standard always hides Apple's items too, so the Apple-items switch is on exactly when native hiding is off.
 @MainActor
-@Suite("System item hiding compatibility", .serialized)
+@Suite("System item hiding follows the hiding method", .serialized, .scratchDefaults)
 struct SystemItemHidingCompatibilityTests {
-    private func withScratchDefaults(_ body: () throws -> Void) throws {
-        let suiteName = "SystemItemHidingCompatibilityTests.\(UUID().uuidString)"
-        let scratch = try #require(UserDefaults(suiteName: suiteName))
-        let previous = Defaults.store
-        let previousCenter = SettingsURIHandler.settingsChangeNotificationCenter
-        Defaults.store = scratch
-        SettingsURIHandler.settingsChangeNotificationCenter = NotificationCenter()
-        defer {
-            SettingsURIHandler.settingsChangeNotificationCenter = previousCenter
-            Defaults.store = previous
-            scratch.removePersistentDomain(forName: suiteName)
-        }
-        try body()
+    @Test("Fresh settings use Standard, which hides Apple's items")
+    func freshSettingsHideAppleItems() {
+        let settings = AdvancedSettings()
+        #expect(!settings.enableNativeAppHiding)
+        #expect(settings.enableExperimentalSystemItemHiding)
     }
 
-    @Test("Enabling native hiding turns off system item hiding")
-    func nativeHidingTakesPrecedence() throws {
-        try withScratchDefaults {
+    @Test("The switch reads the opposite of native hiding as native hiding changes")
+    func switchFollowsNativeHiding() throws {
+        try withPrivateSettingsChangeCenter {
             let settings = AdvancedSettings()
-            settings.enableExperimentalSystemItemHiding = true
             try #require(settings.enableExperimentalSystemItemHiding)
 
             settings.enableNativeAppHiding = true
-
-            #expect(settings.enableNativeAppHiding)
             #expect(!settings.enableExperimentalSystemItemHiding)
             #expect(Defaults.bool(forKey: .enableNativeAppHiding))
-            #expect(!Defaults.bool(forKey: .enableExperimentalSystemItemHiding))
+
+            settings.enableNativeAppHiding = false
+            #expect(settings.enableExperimentalSystemItemHiding)
+            #expect(!Defaults.bool(forKey: .enableNativeAppHiding))
         }
     }
 
-    @Test("System item hiding cannot override native hiding")
-    func conflictingWriteIsRejected() throws {
-        try withScratchDefaults {
+    @Test("Changing native hiding leaves the switch's old Defaults key alone")
+    func switchIsNotStored() throws {
+        try withPrivateSettingsChangeCenter {
+            Defaults.set(false, forKey: .enableExperimentalSystemItemHiding)
             let settings = AdvancedSettings()
-            settings.enableNativeAppHiding = true
 
-            settings.enableExperimentalSystemItemHiding = true
-
-            #expect(settings.enableNativeAppHiding)
-            #expect(!settings.enableExperimentalSystemItemHiding)
-            #expect(!Defaults.bool(forKey: .enableExperimentalSystemItemHiding))
-        }
-    }
-
-    @Test("Disabling native hiding does not re-enable system item hiding")
-    func disablingNativeHidingRequiresExplicitOptIn() throws {
-        try withScratchDefaults {
-            let settings = AdvancedSettings()
-            settings.enableExperimentalSystemItemHiding = true
             settings.enableNativeAppHiding = true
             settings.enableNativeAppHiding = false
 
-            #expect(!settings.enableExperimentalSystemItemHiding)
-            #expect(!Defaults.bool(forKey: .enableExperimentalSystemItemHiding))
-
-            settings.enableExperimentalSystemItemHiding = true
             #expect(settings.enableExperimentalSystemItemHiding)
-            #expect(Defaults.bool(forKey: .enableExperimentalSystemItemHiding))
+            #expect(Defaults.object(forKey: .enableExperimentalSystemItemHiding) as? Bool == false)
         }
     }
 
-    @Test("Profiles cannot enable system item hiding over native hiding", arguments: [false, true])
-    func profileRespectsNativeHiding(nativeHiding: Bool) throws {
-        try withScratchDefaults {
+    @Test("A profile saved with the switch loads, and applying it keeps what the method needs", arguments: [false, true], [false, true])
+    func profileFollowsTheMethod(nativeHiding: Bool, storedSystemItemHiding: Bool) throws {
+        try withPrivateSettingsChangeCenter {
             let settings = AdvancedSettings()
             settings.enableNativeAppHiding = nativeHiding
-            var profile = AdvancedSettingsSnapshot.capture(from: settings)
-            profile.enableExperimentalSystemItemHiding = true
+            let json = Data(#"{"enableExperimentalSystemItemHiding": \#(storedSystemItemHiding)}"#.utf8)
+            let profile = try JSONDecoder().decode(AdvancedSettingsSnapshot.self, from: json)
 
             profile.apply(to: settings)
 
             #expect(settings.enableNativeAppHiding == nativeHiding)
             #expect(settings.enableExperimentalSystemItemHiding == !nativeHiding)
-            #expect(Defaults.bool(forKey: .enableExperimentalSystemItemHiding) == !nativeHiding)
         }
     }
 
-    @Test("Restored settings give native hiding precedence", arguments: [false, true], [false, true])
+    /// The old Standard without Apple's items and the old Everything both read as today's Standard.
+    @Test("Stored settings migrate: old Standard and Everything become Standard, Native stays", arguments: [false, true], [false, true])
     func restoreSettings(nativeHiding: Bool, systemItemHiding: Bool) throws {
-        try withScratchDefaults {
+        try withPrivateSettingsChangeCenter {
             Defaults.set(nativeHiding, forKey: .enableNativeAppHiding)
             Defaults.set(systemItemHiding, forKey: .enableExperimentalSystemItemHiding)
             let settings = AdvancedSettings()
 
             settings.loadInitialState()
 
-            let expectedSystemItemHiding = systemItemHiding && !nativeHiding
             #expect(settings.enableNativeAppHiding == nativeHiding)
-            #expect(settings.enableExperimentalSystemItemHiding == expectedSystemItemHiding)
-            #expect(Defaults.bool(forKey: .enableExperimentalSystemItemHiding) == expectedSystemItemHiding)
-
-            let reloaded = AdvancedSettings()
-            reloaded.loadInitialState()
-            #expect(reloaded.enableNativeAppHiding == nativeHiding)
-            #expect(reloaded.enableExperimentalSystemItemHiding == expectedSystemItemHiding)
+            #expect(settings.enableExperimentalSystemItemHiding == !nativeHiding)
         }
     }
 
-    @Test("A queued URI change cannot re-enable system item hiding")
-    func queuedURIChangeRespectsCurrentMode() throws {
-        try withScratchDefaults {
+    @Test("A user who never stored the switch reads the value the method needs", arguments: [false, true])
+    func missingKeyIsMigrated(nativeHiding: Bool) throws {
+        try withPrivateSettingsChangeCenter {
+            Defaults.set(nativeHiding, forKey: .enableNativeAppHiding)
+            Defaults.removeObject(forKey: .enableExperimentalSystemItemHiding)
             let settings = AdvancedSettings()
-            // URI writes precede their main-queue notification. Native hiding may start between the two.
-            Defaults.set(true, forKey: .enableExperimentalSystemItemHiding)
-            settings.enableNativeAppHiding = true
+
+            settings.loadInitialState()
+
+            #expect(settings.enableExperimentalSystemItemHiding == !nativeHiding)
+        }
+    }
+
+    @Test("A queued URI change for the switch changes nothing", arguments: [false, true])
+    func queuedURIChangeRespectsCurrentMode(nativeHiding: Bool) throws {
+        try withPrivateSettingsChangeCenter {
+            let settings = AdvancedSettings()
+            settings.enableNativeAppHiding = nativeHiding
 
             settings.handleExternalSettingsChange(Notification(
                 name: .settingsDidChangeViaURI,
-                userInfo: ["key": "enableExperimentalSystemItemHiding", "value": true]
+                userInfo: ["key": "enableExperimentalSystemItemHiding", "value": nativeHiding]
             ))
 
-            #expect(settings.enableNativeAppHiding)
-            #expect(!settings.enableExperimentalSystemItemHiding)
-            #expect(!Defaults.bool(forKey: .enableExperimentalSystemItemHiding))
+            #expect(settings.enableNativeAppHiding == nativeHiding)
+            #expect(settings.enableExperimentalSystemItemHiding == !nativeHiding)
         }
     }
 
-    @Test("URI set refuses the incompatible setting", arguments: [false, true])
-    func uriSetRespectsNativeHiding(nativeHiding: Bool) throws {
-        try withScratchDefaults {
-            Defaults.set(nativeHiding, forKey: .enableNativeAppHiding)
+    @Test("The URI reads the switch from native hiding, whatever its old key holds", arguments: [false, true])
+    func uriGetReadsTheMethod(nativeHiding: Bool) async throws {
+        Defaults.set(nativeHiding, forKey: .enableNativeAppHiding)
+        Defaults.set(nativeHiding, forKey: .enableExperimentalSystemItemHiding)
+        let capture = URIDeliveryCapture()
+
+        let sent = await capture.run {
+            SettingsURIHandler.handleGet(
+                key: "enableExperimentalSystemItemHiding",
+                displayUUID: nil,
+                callback: "floe://thaw-response",
+                broadcast: false,
+                requestId: "r1"
+            )
+        }
+
+        #expect(sent)
+        let response = try capture.callbackResponse()
+        let data = try #require(response["data"] as? [String: Any])
+        #expect(data["value"] as? Bool == !nativeHiding)
+    }
+
+    @Test("The URI cannot set the switch", arguments: [false, true])
+    func uriSetIsRefused(value: Bool) throws {
+        try withPrivateSettingsChangeCenter {
+            Defaults.set(false, forKey: .enableNativeAppHiding)
 
             let accepted = SettingsURIHandler.handleSet(
-                key: "enableExperimentalSystemItemHiding", value: "true", sender: "com.test.App"
+                key: "enableExperimentalSystemItemHiding", value: value ? "true" : "false", sender: "com.test.App"
             )
 
-            #expect(accepted == !nativeHiding)
-            #expect(Defaults.bool(forKey: .enableExperimentalSystemItemHiding) == !nativeHiding)
-            #expect(Defaults.bool(forKey: .enableNativeAppHiding) == nativeHiding)
+            #expect(!accepted)
+            #expect(!Defaults.bool(forKey: .enableNativeAppHiding))
         }
     }
 
-    @Test("URI toggle refuses the incompatible setting", arguments: [false, true])
-    func uriToggleRespectsNativeHiding(nativeHiding: Bool) throws {
-        try withScratchDefaults {
-            Defaults.set(nativeHiding, forKey: .enableNativeAppHiding)
+    @Test("The URI cannot toggle the switch")
+    func uriToggleIsRefused() throws {
+        try withPrivateSettingsChangeCenter {
+            Defaults.set(false, forKey: .enableNativeAppHiding)
 
             let accepted = SettingsURIHandler.handleToggle(
                 key: "enableExperimentalSystemItemHiding", sender: "com.test.App"
             )
 
-            #expect(accepted == !nativeHiding)
-            #expect(Defaults.bool(forKey: .enableExperimentalSystemItemHiding) == !nativeHiding)
-            #expect(Defaults.bool(forKey: .enableNativeAppHiding) == nativeHiding)
-        }
-    }
-
-    @Test("URI requests may still turn off an incompatible restored setting", arguments: [false, true])
-    func uriCanClearConflict(toggle: Bool) throws {
-        try withScratchDefaults {
-            Defaults.set(true, forKey: .enableNativeAppHiding)
-            Defaults.set(true, forKey: .enableExperimentalSystemItemHiding)
-
-            let accepted = if toggle {
-                SettingsURIHandler.handleToggle(key: "enableExperimentalSystemItemHiding", sender: "com.test.App")
-            } else {
-                SettingsURIHandler.handleSet(key: "enableExperimentalSystemItemHiding", value: "false", sender: "com.test.App")
-            }
-
-            #expect(accepted)
-            #expect(!Defaults.bool(forKey: .enableExperimentalSystemItemHiding))
-            #expect(Defaults.bool(forKey: .enableNativeAppHiding))
+            #expect(!accepted)
+            #expect(!Defaults.bool(forKey: .enableNativeAppHiding))
         }
     }
 }

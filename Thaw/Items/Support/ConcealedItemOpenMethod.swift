@@ -18,15 +18,17 @@ nonisolated enum ConcealedItemOpenMethod: String, CaseIterable, Sendable {
     /// Reveal the item where it sits and post a real click, for owners that
     /// accept an accessibility press and do nothing with it.
     case clickInPlace
+    /// AXShowMenu on the parked item, the menu a right click opens. Right clicks only.
+    case showMenuInPlace
 
     /// Whether the method activates the item through an accessibility press.
     /// An owner that ignores one press ignores the other.
     var pressesThroughAccessibility: Bool {
-        self != .clickInPlace
+        self == .pressInPlace || self == .revealInPlace
     }
 
-    /// Try the learned method first, then the cheapest; right clicks skip press because it opens the default action.
-    /// showInMenuBar overrides learning to reveal first, falling back to press if the click fails.
+    /// The learned method first, then the cheapest. Right clicks skip press, which opens the default action;
+    /// showInMenuBar reveals first.
     ///
     /// unverified holds the methods that recently reached the owner without a
     /// visible reaction. They go last, so a repeated request tries something
@@ -38,14 +40,19 @@ nonisolated enum ConcealedItemOpenMethod: String, CaseIterable, Sendable {
         unverified: Set<ConcealedItemOpenMethod> = []
     ) -> [ConcealedItemOpenMethod] {
         if mouseButton == .right {
-            return [.revealInPlace]
+            return showInMenuBar ? [.revealInPlace] : [.showMenuInPlace, .revealInPlace]
         }
         let preferred: [ConcealedItemOpenMethod]
         if showInMenuBar {
             preferred = [.revealInPlace, .clickInPlace, .pressInPlace]
         } else {
             let candidates: [ConcealedItemOpenMethod] = [.pressInPlace, .revealInPlace, .clickInPlace]
-            preferred = learned.map { learned in [learned] + candidates.filter { $0 != learned } } ?? candidates
+            // A right click's method would open the wrong menu on a left click.
+            if let learned, learned != .showMenuInPlace {
+                preferred = [learned] + candidates.filter { $0 != learned }
+            } else {
+                preferred = candidates
+            }
         }
         let demotesPresses = unverified.contains { $0.pressesThroughAccessibility }
         let isDemoted: (ConcealedItemOpenMethod) -> Bool = { method in

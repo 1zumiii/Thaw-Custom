@@ -15,7 +15,7 @@ nonisolated enum UpdateChannel: String, CaseIterable, Identifiable {
     case stable
     /// Development / RC builds (sparkle:channel = beta).
     case beta
-    /// Nightly / macOS 27 preview builds (sparkle:channel = alpha).
+    /// Alpha builds for macOS 27 (sparkle:channel = alpha).
     case alpha
 
     /// Stable carries incompatible builds, so offering it would stop updates.
@@ -32,11 +32,13 @@ nonisolated enum UpdateChannel: String, CaseIterable, Identifiable {
         switch self {
         case .stable: "Stable"
         case .beta: "Beta"
-        case .alpha: "Nightly"
+        case .alpha: "Alpha"
         }
     }
 
     /// Sparkle channel names to allow in addition to the default channel.
+    /// Alpha also takes betas: a beta is a later build than the alphas before
+    /// it, and releases are tagged with one channel each.
     var allowedSparkleChannels: Set<String> {
         switch self {
         case .stable:
@@ -44,7 +46,7 @@ nonisolated enum UpdateChannel: String, CaseIterable, Identifiable {
         case .beta:
             ["beta"]
         case .alpha:
-            ["alpha"]
+            ["alpha", "beta"]
         }
     }
 }
@@ -164,6 +166,11 @@ final class UpdatesManager: NSObject {
             .store(in: &cancellables)
     }
 
+    /// Starts with the app once consent is given; the settings process leaves checks to the app.
+    static nonisolated func startsAtLaunch(supportsSparkle: Bool, hasSeenConsent: Bool, isSettingsProcess: Bool) -> Bool {
+        supportsSparkle && hasSeenConsent && !isSettingsProcess
+    }
+
     func startUpdaterIfNeeded() {
         guard Constants.supportsSparkleUpdates else {
             return
@@ -175,8 +182,29 @@ final class UpdatesManager: NSObject {
         updaterController.startUpdater()
     }
 
+    /// Set in the settings process, which hands checks to the app.
+    @ObservationIgnored
+    var forwardCheck: (() -> Void)?
+
+    /// The settings process may have changed Sparkle's stored preferences. Sparkle reads
+    /// them from the defaults, and a reset schedules the next check by them.
+    func storedPreferencesChanged() {
+        guard hasStartedUpdater else { return }
+        withMutation(keyPath: \.automaticallyChecksForUpdates) {
+            // Sparkle already holds the new value; observers only need to hear that it changed.
+        }
+        withMutation(keyPath: \.automaticallyDownloadsUpdates) {
+            // Sparkle already holds the new value; observers only need to hear that it changed.
+        }
+        updater.resetUpdateCycleAfterShortDelay()
+    }
+
     @objc func checkForUpdates() {
         guard Constants.supportsSparkleUpdates else {
+            return
+        }
+        if let forwardCheck {
+            forwardCheck()
             return
         }
         #if DEBUG
@@ -244,7 +272,17 @@ extension UpdatesManager: @MainActor SPUStandardUserDriverDelegate {
         _: SUAppcastItem,
         andInImmediateFocus immediateFocus: Bool
     ) -> Bool {
-        NSApp.isActive && immediateFocus
+        Self.showsScheduledUpdateWindow(
+            appIsActive: NSApp.isActive,
+            immediateFocus: immediateFocus,
+            notificationsCanAlert: appState?.userNotificationManager.canAlert ?? true
+        )
+    }
+
+    /// Whether Sparkle shows a scheduled update's window itself. Otherwise Thaw
+    /// posts a notification, which nobody sees when notifications can't alert.
+    static nonisolated func showsScheduledUpdateWindow(appIsActive: Bool, immediateFocus: Bool, notificationsCanAlert: Bool) -> Bool {
+        (appIsActive && immediateFocus) || !notificationsCanAlert
     }
 
     func standardUserDriverWillHandleShowingUpdate(
