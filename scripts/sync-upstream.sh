@@ -24,7 +24,7 @@ case "$(git remote get-url upstream)" in
 esac
 git remote set-url --push upstream DISABLED
 git config remote.pushDefault origin
-git fetch upstream feat/thaw-3:refs/remotes/upstream/feat/thaw-3
-git merge --no-edit refs/remotes/upstream/feat/thaw-3
+git fetch upstream development:refs/remotes/upstream/development
+git merge --no-edit refs/remotes/upstream/development
 python3 scripts/check-localization.py
 echo 'Upstream merged locally. Review and test before pushing to origin.'
